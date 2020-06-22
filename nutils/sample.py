@@ -43,8 +43,9 @@ multiple integrals simultaneously, which has the advantage that it can
 efficiently combine common substructures.
 '''
 
-from . import types, points, util, function, parallel, numeric, matrix, transformseq
-import numpy, numbers, collections.abc, os, treelog as log
+from . import types, points, util, function, parallel, numeric, matrix, transformseq, sparse
+from .pointsseq import PointsSequence
+import numpy, numbers, collections.abc, os, treelog as log, abc
 
 graphviz = os.environ.get('NUTILS_GRAPHVIZ')
 
@@ -69,38 +70,71 @@ class Sample(types.Singleton):
   representing a (n-dimensional) triangulation of the interior and boundary,
   respectively. Availability of these properties depends on the selected sample
   points, and is typically used in combination with the "bezier" set.
-
-  Args
-  ----
-  transforms : :class:`tuple` or transformation chains
-      List of transformation chains leading to local coordinate systems that
-      contain points.
-  points : :class:`tuple` of point sets
-      List of point sets matching ``transforms``.
-  index : :class:`tuple` of integer arrays
-      List of indices matching ``transforms``, defining the order on which
-      points show up in the evaluation.
   '''
 
+  __slots__ = 'nelems', 'transforms', 'points', 'ndims'
   __cache__ = 'allcoords'
 
+  @staticmethod
   @types.apply_annotations
-  def __init__(self, transforms:types.tuple[transformseq.stricttransforms], points:types.tuple[points.strictpoints], index:types.tuple[types.frozenarray[types.strictint]]):
-    assert len(points) == len(index)
+  def new(transforms:types.tuple[transformseq.stricttransforms], points:types.strict[PointsSequence], index:types.tuple[types.frozenarray[int]]=None):
+    '''Create a new :class:`Sample`.
+
+    Parameters
+    ----------
+    transforms : :class:`tuple` or transformation chains
+        List of transformation chains leading to local coordinate systems that
+        contain points.
+    points : :class:`~nutils.pointsseq.PointsSequence`
+        Points sequence.
+    index : :class:`tuple` of integer arrays, optional
+        List of indices matching ``transforms``, defining the order on which
+        points show up in the evaluation. If absent the indices will be strict
+        increasing.
+    '''
+
+    if index is None:
+      return _DefaultIndex(transforms, points)
+    else:
+      return _CustomIndex(transforms, points, index)
+
+  def __init__(self, transforms, points):
+    '''
+    parameters
+    ----------
+    transforms : :class:`tuple` or transformation chains
+        List of transformation chains leading to local coordinate systems that
+        contain points.
+    points : :class:`~nutils.pointsseq.PointsSequence`
+        Points sequence.
+    '''
+
     assert len(transforms) >= 1
     assert all(len(t) == len(points) for t in transforms)
     self.nelems = len(transforms[0])
     self.transforms = transforms
     self.points = points
-    self.index = index
-    self.npoints = sum(p.npoints for p in points)
     self.ndims = transforms[0].fromdims
 
   def __repr__(self):
-    return '{}<{}D, {} elems, {} points>'.format(type(self).__qualname__, self.ndims, self.nelems, self.npoints)
+    return '{}.{}<{}D, {} elems, {} points>'.format(type(self).__module__, type(self).__qualname__, self.ndims, self.nelems, self.npoints)
+
+  @property
+  def npoints(self):
+    return self.points.npoints
+
+  @property
+  def index(self):
+    return tuple(map(self.getindex, range(self.nelems)))
+
+  @abc.abstractmethod
+  def getindex(self, ielem):
+    '''Return the indices of `Sample.points[ielem]` in results of `Sample.eval`.'''
+
+    raise NotImplementedError
 
   def _prepare_funcs(self, funcs):
-    return [function.asarray(func).prepare_eval(ndims=self.ndims) for func in funcs]
+    return [function.prepare_eval(function.asarray(func), ndims=self.ndims) for func in funcs]
 
   @util.positional_only
   @util.single_or_multiple
@@ -116,12 +150,32 @@ class Sample(types.Singleton):
         Optional arguments for function evaluation.
     '''
 
+    datas = self.integrate_sparse(funcs, arguments)
+    with log.iter.fraction('assembling', datas) as items:
+      return [_convert(data, inplace=True) for data in items]
+
+  @util.single_or_multiple
+  @types.apply_annotations
+  def integrate_sparse(self, funcs:types.tuple[function.asarray], arguments:types.frozendict[str,types.frozenarray]=None):
+    '''Integrate functions into sparse data.
+
+    Args
+    ----
+    funcs : :class:`nutils.function.Array` object or :class:`tuple` thereof.
+        The integrand(s).
+    arguments : :class:`dict` (default: None)
+        Optional arguments for function evaluation.
+    '''
+
+    if arguments is None:
+      arguments = {}
+
     # Functions may consist of several blocks, such as originating from
     # chaining. Here we make a list of all blocks consisting of triplets of
     # argument id, evaluable index, and evaluable values.
 
     funcs = self._prepare_funcs(funcs)
-    blocks = [(ifunc, function.Tuple(ind), f.simplified.optimized_for_numpy) for ifunc, func in enumerate(funcs) for ind, f in function.blocks(func)]
+    blocks = [(ifunc, function.Tuple(ind), f.optimized_for_numpy) for ifunc, func in enumerate(funcs) for ind, f in function.blocks(func)]
     block2func, indices, values = zip(*blocks) if blocks else ([],[],[])
 
     log.debug('integrating {} distinct blocks'.format('+'.join(
@@ -131,52 +185,44 @@ class Sample(types.Singleton):
       function.Tuple(values).graphviz(graphviz)
 
     # To allocate (shared) memory for all block data we evaluate indexfunc to
-    # build an nblocks x nelems+1 offset array, and nblocks index lists of
-    # length nelems.
+    # build an nblocks x nelems+1 offset array. In the first step the block
+    # sizes are evaluated.
 
-    offsets = numpy.zeros((len(blocks), self.nelems+1), dtype=int)
+    offsets = numpy.empty((len(blocks), self.nelems+1), dtype=numpy.uint64)
     if blocks:
       sizefunc = function.stack([f.size for ifunc, ind, f in blocks]).simplified
       for ielem, transforms in enumerate(zip(*self.transforms)):
-        n, = sizefunc.eval(_transforms=transforms, **arguments)
-        offsets[:,ielem+1] = offsets[:,ielem] + n
+        offsets[:,ielem+1], = sizefunc.eval(_transforms=transforms, **arguments)
 
-    # Since several blocks may belong to the same function, we post process the
+    # In the second step the block sizes are accumulated to form offsets. Since
+    # several blocks may belong to the same function, we post process the
     # offsets to form consecutive intervals in longer arrays. The length of
-    # these arrays is captured in the nfuncs-array nvals.
+    # these arrays is captured in the nvals array.
 
-    nvals = numpy.zeros(len(funcs), dtype=int)
+    nvals = numpy.zeros(len(funcs), dtype=numpy.uint64)
     for iblock, ifunc in enumerate(block2func):
-      offsets[iblock] += nvals[ifunc]
-      nvals[ifunc] = offsets[iblock,-1]
+      v = offsets[iblock]
+      v[0] = nvals[ifunc]
+      numpy.cumsum(v, out=v) # in place accumulation
+      assert (v[1:] >= v[:-1]).all(), 'integer overflow'
+      nvals[ifunc] = v[-1]
 
-    # The data_index list contains shared memory index and value arrays for
-    # each function argument.
+    # In a second, parallel element loop, value and index are evaluated and
+    # stored in shared memory using the offsets array for location. Each
+    # element has its own location so no locks are required.
 
-    data_index = [(parallel.shempty(n, dtype=float), parallel.shempty((funcs[ifunc].ndim,n), dtype=int)) for ifunc, n in enumerate(nvals)]
-
-    # In a second, parallel element loop, valuefunc is evaluated to fill the
-    # data part of data_index using the offsets array for location. Each
-    # element has its own location so no locks are required. The index part of
-    # data_index is filled in the same loop. It does not use valuefunc data but
-    # benefits from parallel speedup.
-
+    datas = [parallel.shempty(n, dtype=sparse.dtype(funcs[ifunc].shape)) for ifunc, n in enumerate(nvals)]
     valueindexfunc = function.Tuple(function.Tuple([value]+list(index)) for value, index in zip(values, indices))
     with parallel.ctxrange('integrating', self.nelems) as ielems:
       for ielem in ielems:
         points = self.points[ielem]
         for iblock, (intdata, *indices) in enumerate(valueindexfunc.eval(_transforms=tuple(t[ielem] for t in self.transforms), _points=points.coords, **arguments)):
-          s = slice(*offsets[iblock,ielem:ielem+2])
-          data, index = data_index[block2func[iblock]]
-          w_intdata = numeric.dot(points.weights, intdata)
-          data[s] = w_intdata.ravel()
-          si = (slice(None),) + (numpy.newaxis,) * (w_intdata.ndim-1)
-          for idim, (ii,) in enumerate(indices):
-            index[idim,s].reshape(w_intdata.shape)[...] = ii[si]
-            si = si[:-1]
+          data = datas[block2func[iblock]][offsets[iblock,ielem]:offsets[iblock,ielem+1]].reshape(intdata.shape[1:])
+          numpy.einsum('p,p...->...', points.weights, intdata, out=data['value'])
+          for idim, ii in enumerate(indices):
+            data['index']['i'+str(idim)] = ii.reshape([-1]+[1]*(data.ndim-1-idim))
 
-    with log.iter.fraction('assembling', data_index, funcs) as items:
-      return [matrix.assemble(*data, shape=func.shape) for data, func in items]
+    return datas
 
   def integral(self, func):
     '''Create Integral object for postponed integration.
@@ -192,7 +238,7 @@ class Sample(types.Singleton):
   @util.positional_only
   @util.single_or_multiple
   @types.apply_annotations
-  def eval(self, funcs, arguments:argdict=...):
+  def eval(self, funcs:types.tuple[function.asarray], arguments:argdict=...):
     '''Evaluate function.
 
     Args
@@ -205,7 +251,7 @@ class Sample(types.Singleton):
 
     funcs = self._prepare_funcs(funcs)
     retvals = [parallel.shzeros((self.npoints,)+func.shape, dtype=func.dtype) for func in funcs]
-    idata = function.Tuple(function.Tuple([ifunc, function.Tuple(ind), f.simplified.optimized_for_numpy]) for ifunc, func in enumerate(funcs) for ind, f in function.blocks(func))
+    idata = function.Tuple(function.Tuple([ifunc, function.Tuple(ind), f.optimized_for_numpy]) for ifunc, func in enumerate(funcs) for ind, f in function.blocks(func))
 
     if graphviz:
       idata.graphviz(graphviz)
@@ -213,15 +259,15 @@ class Sample(types.Singleton):
     with parallel.ctxrange('evaluating', self.nelems) as ielems:
       for ielem in ielems:
         for ifunc, inds, data in idata.eval(_transforms=tuple(t[ielem] for t in self.transforms), _points=self.points[ielem].coords, **arguments):
-          numpy.add.at(retvals[ifunc], numpy.ix_(self.index[ielem], *[ind for (ind,) in inds]), data)
+          numpy.add.at(retvals[ifunc], numpy.ix_(self.getindex(ielem), *[ind for (ind,) in inds]), data)
 
     return retvals
 
   @property
   def allcoords(self):
     coords = numpy.empty([self.npoints, self.ndims])
-    for points, index in zip(self.points, self.index):
-      coords[index] = points.coords
+    for ielem, points in enumerate(self.points):
+      coords[self.getindex(ielem)] = points.coords
     return types.frozenarray(coords, copy=False)
 
   def basis(self):
@@ -231,7 +277,7 @@ class Sample(types.Singleton):
     index, tail = function.TransformsIndexWithTail(self.transforms[0], function.TRANS)
     I = function.Elemwise(self.index, index, dtype=int)
     B = function.Sampled(function.ApplyTransforms(tail), expect=function.take(self.allcoords, I, axis=0))
-    return function.Inflate(func=B, dofmap=I, length=self.npoints, axis=0)
+    return function.inflate(B, dofmap=I, length=self.npoints, axis=0)
 
   def asfunction(self, array):
     '''Convert sampled data to evaluable array.
@@ -264,7 +310,7 @@ class Sample(types.Singleton):
     row defines a simplex by mapping vertices into the list of points.
     '''
 
-    return numpy.concatenate([index.take(points.tri) for points, index in zip(self.points, self.index)])
+    return numpy.concatenate([self.getindex(ielem).take(points.tri) for ielem, points in enumerate(self.points)])
 
   @property
   def hull(self):
@@ -276,7 +322,7 @@ class Sample(types.Singleton):
     triangulations originating from separate elements are disconnected.
     '''
 
-    return numpy.concatenate([index.take(points.hull) for points, index in zip(self.points, self.index)])
+    return numpy.concatenate([self.getindex(ielem).take(points.hull) for ielem, points in enumerate(self.points)])
 
   def subset(self, mask):
     '''Reduce the number of points.
@@ -297,13 +343,50 @@ class Sample(types.Singleton):
     subset : :class:`Sample`
     '''
 
-    selection = types.frozenarray([ielem for ielem in range(self.nelems) if mask[self.index[ielem]].any()])
+    selection = types.frozenarray([ielem for ielem in range(self.nelems) if mask[self.getindex(ielem)].any()])
     transforms = tuple(transform[selection] for transform in self.transforms)
-    points = [self.points[ielem] for ielem in selection]
-    offset = numpy.cumsum([0] + [p.npoints for p in points])
-    return Sample(transforms, points, map(numpy.arange, offset[:-1], offset[1:]))
+    return Sample.new(transforms, self.points.take(selection))
 
 strictsample = types.strict[Sample]
+
+class _DefaultIndex(Sample):
+
+  __slots__ = ()
+  __cache__ = 'offsets'
+
+  @property
+  def offsets(self):
+    return numpy.cumsum([0]+[p.npoints for p in self.points])
+
+  def getindex(self, ielem):
+    return numpy.arange(self.offsets[ielem], self.offsets[ielem+1])
+
+  @property
+  def tri(self):
+    return self.points.tri
+
+  @property
+  def hull(self):
+    return self.points.hull
+
+class _CustomIndex(Sample):
+
+  __slots__ = '_index'
+
+  def __init__(self, transforms, points, index):
+    self._index = index
+    if len(index) != len(points):
+      raise ValueError('expected an `index` with {} items but got {}'.format(len(points), len(index)))
+    if not all(len(i) == p.npoints for i, p in zip(self._index, points)):
+      raise ValueError('lengths of indices does not match number of points per element')
+    super().__init__(transforms, points)
+
+  @property
+  def index(self):
+    return self._index
+
+  def getindex(self, ielem):
+    return self._index[ielem]
 
 class Integral(types.Singleton):
   '''Postponed integration.
@@ -331,13 +414,17 @@ class Integral(types.Singleton):
   '''
 
   __slots__ = '_integrands', 'shape'
-  __cache__ = 'derivative'
+  __cache__ = 'derivative', 'argshapes'
 
   @types.apply_annotations
   def __init__(self, integrands:types.frozendict[strictsample, function.simplified], shape:types.tuple[int]):
     assert all(ig.shape == shape for ig in integrands.values()), 'incompatible shapes: expected {}, got {}'.format(shape, ', '.join({str(ig.shape) for ig in integrands.values()}))
-    self._integrands = integrands
+    self._integrands = {topo: func for topo, func in integrands.items() if not function.iszero(func)}
     self.shape = shape
+
+  @property
+  def ndim(self):
+    return len(self.shape)
 
   def __repr__(self):
     return 'Integral<{}>'.format(','.join(map(str, self.shape)))
@@ -369,10 +456,10 @@ class Integral(types.Singleton):
     derivative : :class:`Integral`
     '''
 
-    argshape = self._argshape(target)
-    arg = function.Argument(target, argshape)
+    if not isinstance(target, function.Argument):
+      target = function.Argument(target, self.argshapes[target])
     seen = {}
-    return Integral({di: function.derivative(integrand, var=arg, seen=seen) for di, integrand in self._integrands.items()}, shape=self.shape+argshape)
+    return Integral({di: function.derivative(integrand, var=target, seen=seen) for di, integrand in self._integrands.items()}, shape=self.shape+target.shape)
 
   def replace(self, arguments):
     '''Return copy with arguments applied.
@@ -408,12 +495,7 @@ class Integral(types.Singleton):
     iscontained : :class:`bool`
     '''
 
-    try:
-      self._argshape(name)
-    except KeyError:
-      return False
-    else:
-      return True
+    return name in self.argshapes
 
   def __add__(self, other):
     if not isinstance(other, Integral):
@@ -445,16 +527,13 @@ class Integral(types.Singleton):
       return NotImplemented
     return self.__mul__(1/other)
 
-  def _argshape(self, name):
-    assert isinstance(name, str)
-    shapes = {func.shape[:func.ndim-func._nderiv]
-      for func in function.Tuple(self._integrands.values()).dependencies
-        if isinstance(func, function.Argument) and func._name == name}
-    if not shapes:
-      raise KeyError(name)
-    assert len(shapes) == 1, 'inconsistent shapes for argument {!r}'.format(name)
-    shape, = shapes
-    return shape
+  @property
+  def argshapes(self):
+    items = [(dep._name, dep.shape[:dep.ndim-dep._nderiv]) for func in self._integrands.values() for dep in func.dependencies if isinstance(dep, function.Argument)]
+    shapes = dict(items)
+    if any(shapes[name] != shape for name, shape in items):
+      raise Exception('non-matching arguments shapes encountered')
+    return types.frozendict(shapes)
 
   @property
   def T(self):
@@ -483,11 +562,54 @@ def eval_integrals(*integrals: types.tuple[strictintegral], **arguments:argdict)
   results : :class:`tuple` of arrays and/or :class:`nutils.matrix.Matrix` objects.
   '''
 
-  retvals = [matrix.empty(integral.shape) for integral in integrals]
+  with log.iter.fraction('assembling', eval_integrals_sparse(*integrals, **arguments)) as retvals:
+    return [_convert(retval, inplace=True) for retval in retvals]
+
+@types.apply_annotations
+def eval_integrals_sparse(*integrals: types.tuple[strictintegral], **arguments: argdict):
+  '''Evaluate integrals into sparse data.
+
+  Evaluate one or several postponed integrals. By evaluating them
+  simultaneously, rather than using :func:`Integral.eval` on each integral
+  individually, integrations will be grouped per Sample and jointly executed,
+  potentially increasing efficiency.
+
+  Args
+  ----
+  integrals : :class:`tuple` of integrals
+      Integrals to be evaluated.
+  arguments : :class:`dict` (default: None)
+      Optional arguments for function evaluation.
+
+  Returns
+  -------
+  results : :class:`tuple` of arrays and/or :class:`nutils.matrix.Matrix` objects.
+  '''
+
+  if arguments is None:
+    arguments = types.frozendict({})
+
+  retvals = [[sparse.empty(integral.shape)] for integral in integrals] # initialize with zeros to set shape and avoid empty addition
   with log.iter.fraction('topology', util.gather((di, iint) for iint, integral in enumerate(integrals) for di in integral._integrands)) as gathered:
     for sample, iints in gathered:
-      for iint, retval in zip(iints, sample.integrate([integrals[iint]._integrands[sample] for iint in iints], **arguments)):
-        retvals[iint] += retval
-  return retvals
+      for iint, retval in zip(iints, sample.integrate_sparse([integrals[iint]._integrands[sample] for iint in iints], arguments)):
+        retvals[iint].append(retval)
+      del retval
+
+  return [sparse.add(retval) for retval in retvals]
+
+def _convert(data, inplace=False):
+  '''Convert a two-dimensional sparse object to an appropriate object.
+
+  The return type is determined based on dimension: a zero-dimensional object
+  becomes a scalar, a one-dimensional object a (dense) Numpy vector, a
+  two-dimensional object a Nutils matrix, and any higher dimensional object a
+  deduplicated and pruned sparse object.
+  '''
+
+  ndim = sparse.ndim(data)
+  return sparse.toarray(data) if ndim < 2 \
+    else matrix.fromsparse(data, inplace=inplace) if ndim == 2 \
+    else sparse.prune(sparse.dedup(data, inplace=inplace), inplace=True)
 
 # vim:sw=2:sts=2:et

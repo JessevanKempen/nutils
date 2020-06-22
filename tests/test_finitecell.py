@@ -1,5 +1,6 @@
 from nutils import *
 from nutils.testing import *
+import treelog as log
 
 
 class hierarchical(TestCase):
@@ -247,7 +248,7 @@ class cutdomain(TestCase):
         point = p * .5**numpy.arange(self.domain.ndims)
         r = numpy.linalg.norm(point)
         try:
-          sample = self.pos.locate(curvegeom, [point])
+          sample = self.pos.locate(curvegeom, [point], tol=1e-12)
         except topology.LocateError:
           self.assertGreater(r, self.radius)
         else:
@@ -370,6 +371,7 @@ class partialtrim(TestCase):
   # +-----+-----+
 
   def setUp(self):
+    super().setUp()
     self.topo, geom = mesh.rectilinear([2,2])
     self.topoA = self.topo.trim(geom[0]-1+geom[1]*(geom[1]-.5), maxrefine=1)
     self.topoB = self.topo - self.topoA
@@ -393,7 +395,7 @@ class partialtrim(TestCase):
     self.assertEqual(set(self.topoB.boundary['trimmed'].transforms), set(self.topoA.boundary['trimmed'].opposites))
 
   def test_opposites(self):
-    ielem = function.elemwise(self.topo.transforms, numpy.arange(4))
+    ielem = function.Elemwise(numpy.arange(4), self.topo.f_index, dtype=int)
     sampleA = self.topoA.boundary['trimmed'].sample('uniform', 1)
     sampleB = self.topoB.boundary['trimmed'].sample('uniform', 1)
     self.assertEqual(set(sampleB.eval(ielem)), {0,1})

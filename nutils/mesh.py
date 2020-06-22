@@ -26,8 +26,10 @@ accompanying geometry function. Meshes can either be generated on the fly, e.g.
 provided at this point.
 """
 
-from . import topology, function, util, element, elementseq, numpy, numeric, transform, transformseq, warnings, types, cache, _
-import os, itertools, re, math, treelog as log, io, contextlib
+from . import topology, function, util, element, numeric, transform, transformseq, warnings, types, cache
+from .elementseq import References
+import numpy, os, itertools, re, math, treelog as log, io, contextlib
+_ = numpy.newaxis
 
 # MESH GENERATORS
 
@@ -345,6 +347,22 @@ def parsegmsh(mshdata):
 
   msh = gmsh.main.read_buffer(mshdata)
 
+  if not msh.cell_sets:
+    # Old versions of the gmsh file format repeat elements that have multiple
+    # tags. To support this we edit the meshio data to bring it in the same
+    # form as the new files by deduplicating cells and creating cell_sets.
+    renums = []
+    for icell, cells in enumerate(msh.cells):
+      keep = (cells.data[1:] != cells.data[:-1]).any(axis=1)
+      if keep.all():
+        renum = numpy.arange(len(cells.data))
+      else:
+        msh.cells[icell] = cells._replace(data=cells.data[numpy.hstack([True, keep])])
+        renum = numpy.hstack([0, keep.cumsum()])
+      renums.append(renum)
+    for name, (itag, nd) in msh.field_data.items():
+      msh.cell_sets[name] = [renum[data == itag] for data, renum in zip(msh.cell_data['gmsh:physical'], renums)]
+
   # Coords is a 2d float-array such that coords[inode,idim] == coordinate.
   coords = msh.points
 
@@ -366,10 +384,10 @@ def parsegmsh(mshdata):
   # Tags is a list of (nd, name, ndelems) tuples that define topological groups
   # per dimension. Since meshio associates group names with cells, which are
   # concatenated in nodes, element ids are offset and concatenated to match.
-  tags = [(nd, name, numpy.concatenate([(data == itag).nonzero()[0]
+  tags = [(msh.field_data[name][1], name, numpy.concatenate([selection
     + sum(len(cells.data) for cells in msh.cells[:icell] if cells.type == msh.cells[icell].type) # offset into nodes
-                                         for icell, data in enumerate(msh.cell_data['gmsh:physical'])]))
-           for name, (itag, nd) in msh.field_data.items()]
+        for icell, selection in enumerate(selections)]))
+           for name, selections in msh.cell_sets.items()]
 
   # determine the dimension of the topology
   ndims = max(nodes)
@@ -528,7 +546,7 @@ def simplex(nodes, cnodes, coords, tags, btags, ptags, name='simplex'):
   transforms = transformseq.IdentifierTransforms(ndims=ndims, name=name, length=nelems)
   topo = topology.SimplexTopology(nodes, transforms, transforms)
   coeffs = element.getsimplex(ndims).get_poly_coeffs('lagrange', degree=degree)
-  basis = function.PlainBasis([coeffs] * nelems, cnodes, nverts, topo.transforms)
+  basis = function.PlainBasis([coeffs] * nelems, cnodes, nverts, topo.f_index, topo.f_coords).wrapped
   geom = (basis[:,_] * coords).sum(0)
 
   connectivity = topo.connectivity
@@ -557,7 +575,7 @@ def simplex(nodes, cnodes, coords, tags, btags, ptags, name='simplex'):
     pmap = {inode: numpy.array(numpy.equal(nodes, inode).nonzero()).T for inode in set.union(*map(set, ptags.values()))}
     for pname, inodes in ptags.items():
       ptransforms = transformseq.PlainTransforms([topo.transforms[ielem] + (ptrans[ivertex],) for inode in inodes for ielem, ivertex in pmap[inode]], 0)
-      preferences = elementseq.asreferences([element.getsimplex(0)], 0)*len(ptransforms)
+      preferences = References.uniform(element.getsimplex(0), len(ptransforms))
       pgroups[pname] = topology.Topology(preferences, ptransforms, ptransforms)
 
   vgroups = {}
@@ -601,7 +619,7 @@ def simplex(nodes, cnodes, coords, tags, btags, ptags, name='simplex'):
     vpgroups = {}
     for pname, inodes in ptags.items():
       ptransforms = transformseq.PlainTransforms([topo.transforms[ielem] + (ptrans[ivertex],) for inode in inodes for ielem, ivertex in pmap[inode] if keep[ielem]], 0)
-      preferences = elementseq.asreferences([element.getsimplex(0)], 0)*len(ptransforms)
+      preferences = References.uniform(element.getsimplex(0), len(ptransforms))
       vpgroups[pname] = topology.Topology(preferences, ptransforms, ptransforms)
     vgroups[name] = vtopo.withgroups(bgroups=vbgroups, igroups=vigroups, pgroups=vpgroups)
 
@@ -669,7 +687,7 @@ def unitsquare(nelems, etype):
         transforms[n*2:(n+1)*2] = (root, transform.Shift([float(i),float(j)])),
         connectivity[n*2:(n+1)*2] = numpy.concatenate(connectivity[n*2:(n+1)*2])[[3,2,4,1] if i%2==j%2 else [3,2,0,5]],
         connectivity = [c-numpy.greater(c,n*2) for c in connectivity]
-      topo = topology.ConnectedTopology(elementseq.asreferences(references, 2), transformseq.PlainTransforms(transforms, 2),transformseq.PlainTransforms(transforms, 2), tuple(types.frozenarray(c, copy=False) for c in connectivity))
+      topo = topology.ConnectedTopology(References.from_iter(references, 2), transformseq.PlainTransforms(transforms, 2),transformseq.PlainTransforms(transforms, 2), tuple(types.frozenarray(c, copy=False) for c in connectivity))
 
     x, y = topo.boundary.elem_mean(function.rootcoords(2), degree=1).T
     bgroups = dict(left=x==0, right=x==nelems, bottom=y==0, top=y==nelems)

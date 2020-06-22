@@ -22,7 +22,7 @@
 Module with general purpose types.
 """
 
-import inspect, functools, hashlib, builtins, numbers, collections.abc, itertools, abc, sys, weakref, re, io
+import inspect, functools, hashlib, builtins, numbers, collections.abc, itertools, abc, sys, weakref, re, io, types
 import numpy
 
 def aspreprocessor(apply):
@@ -305,6 +305,9 @@ def nutils_hash(data):
     data.seek(0)
     map(h.update, iter(lambda: data.read(0x20000), b''))
     data.seek(pos)
+  elif t is types.MethodType:
+    h.update(nutils_hash(data.__self__))
+    h.update(nutils_hash(data.__name__))
   else:
     raise TypeError('unhashable type: {!r} {!r}'.format(data, t))
   return h.digest()
@@ -557,9 +560,9 @@ class ImmutableMeta(CacheMeta):
     for preprocess in cls._pre_init:
       args, kwargs = preprocess(*args, **kwargs)
     args = args[1:]
-    return cls._new(*args, **kwargs)
+    return cls._new(args, kwargs)
 
-  def _new(cls, *args, **kwargs):
+  def _new(cls, args, kwargs):
     self = cls.__new__(cls)
     self._args = args
     self._kwargs = kwargs
@@ -623,13 +626,13 @@ class Immutable(metaclass=ImmutableMeta):
   __cache__ = '__nutils_hash__',
 
   def __reduce__(self):
-    return self.__class__._new, self._args
+    return self.__class__._new, (self._args, self._kwargs)
 
   def __hash__(self):
     return self._hash
 
   def __eq__(self, other):
-    return self.__class__ is other.__class__ and self._hash == other._hash and self._args == other._args and self._kwargs == other._kwargs
+    return type(self) is type(other) and self._hash == other._hash and self._args == other._args and self._kwargs == other._kwargs
 
   @property
   def __nutils_hash__(self):
@@ -650,9 +653,6 @@ class Immutable(metaclass=ImmutableMeta):
   def __str__(self):
     return '{}({})'.format(self.__class__.__name__, ','.join(str(arg) for arg in self._args))
 
-  def edit(self, op):
-    return self.__class__(*[op(arg) for arg in self._args])
-
 class SingletonMeta(ImmutableMeta):
 
   def __new__(mcls, name, bases, namespace, **kwargs):
@@ -660,12 +660,12 @@ class SingletonMeta(ImmutableMeta):
     cls._cache = weakref.WeakValueDictionary()
     return cls
 
-  def _new(cls, *args, **kwargs):
+  def _new(cls, args, kwargs):
     key = args + tuple((key, kwargs[key]) for key in sorted(kwargs))
     try:
       self = cls._cache[key]
     except KeyError:
-      cls._cache[key] = self = super()._new(*args, **kwargs)
+      cls._cache[key] = self = super()._new(args, kwargs)
     return self
 
 class Singleton(Immutable, metaclass=SingletonMeta):
@@ -958,7 +958,7 @@ class frozendict(collections.abc.Mapping, metaclass=_frozendictmeta):
   def __eq__(self, other):
     if self is other:
       return True
-    if not isinstance(other, frozendict):
+    if type(other) is not type(self):
       return False
     if self.__base is other.__base:
       return True
@@ -1087,7 +1087,7 @@ class frozenmultiset(collections.abc.Container, metaclass=_frozenmultisetmeta):
 
   __reduce__ = lambda self: (frozenmultiset, (self.__items,))
   __hash__ = lambda self: hash(self.__key)
-  __eq__ = lambda self, other: isinstance(other, frozenmultiset) and self.__key == other.__key
+  __eq__ = lambda self, other: type(other) is type(self) and self.__key == other.__key
   __contains__ = lambda self, item: item in self.__items
   __iter__ = lambda self: iter(self.__items)
   __len__ = lambda self: len(self.__items)
@@ -1190,7 +1190,7 @@ class frozenarray(collections.abc.Sequence, metaclass=_frozenarraymeta):
   def __eq__(self, other):
     if self is other:
       return True
-    if not isinstance(other, frozenarray):
+    if type(other) is not type(self):
       return False
     if self.__base is other.__base:
       return True

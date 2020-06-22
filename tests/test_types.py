@@ -90,6 +90,13 @@ class apply_annotations(TestCase):
 
 class nutils_hash(TestCase):
 
+  class custom:
+    @property
+    def __nutils_hash__(self):
+      return b'01234567890123456789'
+    def f(self):
+      pass
+
   def test_ellipsis(self):
     self.assertEqual(nutils.types.nutils_hash(...).hex(), '0c8bce06e451e4d5c49f60da0abf2ccbadf80600')
 
@@ -172,12 +179,11 @@ class nutils_hash(TestCase):
     finally:
       os.unlink(path)
 
+  def test_type_boundmethod(self):
+    self.assertEqual(nutils.types.nutils_hash(self.custom().f).hex(), 'ebf7084bb2504922235ab035a9197b9cb4cf47af')
+
   def test_custom(self):
-    class custom:
-      @property
-      def __nutils_hash__(self):
-        return b'01234567890123456789'
-    self.assertEqual(nutils.types.nutils_hash(custom()).hex(), b'01234567890123456789'.hex())
+    self.assertEqual(nutils.types.nutils_hash(self.custom()).hex(), b'01234567890123456789'.hex())
 
   def test_unhashable(self):
     with self.assertRaises(TypeError):
@@ -898,11 +904,11 @@ class c_array(TestCase):
       nutils.types.c_array()
 
 class T_Immutable(nutils.types.Immutable):
-  def __init__(self, x, y):
+  def __init__(self, x, y, *, z):
     pass
 
 class T_Singleton(nutils.types.Singleton):
-  def __init__(self, x, y):
+  def __init__(self, x, y, *, z):
     pass
 
 @parametrize
@@ -910,7 +916,7 @@ class ImmutableFamily(TestCase):
 
   def test_pickle(self):
     T = {nutils.types.Immutable: T_Immutable, nutils.types.Singleton: T_Singleton}[self.cls]
-    a = T(1, 2)
+    a = T(1, 2, z=3)
     b = pickle.loads(pickle.dumps(a))
     self.assertEqual(a, b)
 
@@ -995,6 +1001,7 @@ ImmutableFamily(cls=nutils.types.Singleton)
 class Unit(TestCase):
 
   def setUp(self):
+    super().setUp()
     self.U = nutils.types.unit(m=1, s=1, g=1e-3,
       Pa='N/m2', N='kg*m/s2', lb='453.59237g', h='3600s', **{'in': '.0254m'})
 

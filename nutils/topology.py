@@ -34,8 +34,12 @@ out in element loops. For lower level operations topologies can be used as
 :mod:`nutils.element` iterators.
 """
 
-from . import element, elementseq, function, util, parallel, numeric, cache, transform, transformseq, warnings, matrix, types, sample, points, _
+from . import element, function, util, parallel, numeric, cache, transform, transformseq, warnings, matrix, types, points, sparse
+from .sample import Sample
+from .elementseq import References
+from .pointsseq import PointsSequence
 import numpy, functools, collections.abc, itertools, functools, operator, numbers, pathlib, abc, treelog as log
+_ = numpy.newaxis
 
 _identity = lambda x: x
 
@@ -46,7 +50,7 @@ class Topology(types.Singleton):
   __cache__ = 'border_transforms', 'boundary', 'interfaces'
 
   @types.apply_annotations
-  def __init__(self, references:elementseq.strictreferences, transforms:transformseq.stricttransforms, opposites:transformseq.stricttransforms):
+  def __init__(self, references:types.strict[References], transforms:transformseq.stricttransforms, opposites:transformseq.stricttransforms):
     assert references.ndims == opposites.fromdims == transforms.fromdims
     assert len(references) == len(transforms) == len(opposites)
     self.references = references
@@ -104,7 +108,7 @@ class Topology(types.Singleton):
     # The last condition is to avoid duplicate elements. Note that we could
     # have reused the result of an earlier lookup to avoid a new (using index
     # instead of contains) but we choose to trade some speed for simplicity.
-    references = elementseq.chain([self.references[ind_self], other.references[ind_other]], self.ndims)
+    references = self.references.take(ind_self).chain(other.references.take(ind_other))
     transforms = transformseq.chain([self.transforms[ind_self], other.transforms[ind_other]], self.ndims)
     opposites = transformseq.chain([self.opposites[ind_self], other.opposites[ind_other]], self.ndims)
     return Topology(references, transforms, opposites)
@@ -144,12 +148,31 @@ class Topology(types.Singleton):
       yield topo
       topo = topo.refined
 
+  @property
+  def _index_coords(self):
+    index, tail = function.TransformsIndexWithTail(self.transforms, function.TRANS)
+    coords = function.ApplyTransforms(tail)
+    assert coords.shape == (self.ndims,)
+    return index, coords
+
+  @property
+  def f_index(self):
+    '''The evaluable index of the element in this topology.'''
+
+    return self._index_coords[0]
+
+  @property
+  def f_coords(self):
+    '''The evaluable element local coordinates.'''
+
+    return self._index_coords[1]
+
   def basis(self, name, *args, **kwargs):
     '''
     Create a basis.
     '''
     if self.ndims == 0:
-      return function.PlainBasis([[1]], [[0]], 1, self.transforms)
+      return function.PlainBasis([[1]], [[0]], 1, self.f_index, self.f_coords).wrapped
     split = name.split('-', 1)
     if len(split) == 2 and split[0] in ('h', 'th'):
       name = split[1] # default to non-hierarchical bases
@@ -161,24 +184,23 @@ class Topology(types.Singleton):
   def sample(self, ischeme, degree):
     'Create sample.'
 
-    points = [ischeme(reference, degree) for reference in self.references] if callable(ischeme) \
+    points = PointsSequence.from_iter((ischeme(reference, degree) for reference in self.references), self.ndims) if callable(ischeme) \
         else self.references.getpoints(ischeme, degree)
-    offset = numpy.cumsum([0] + [p.npoints for p in points])
     transforms = self.transforms,
     if len(self.transforms) == 0 or self.opposites != self.transforms:
       transforms += self.opposites,
-    return sample.Sample(transforms, points, map(numpy.arange, offset[:-1], offset[1:]))
+    return Sample.new(transforms, points)
 
   @util.single_or_multiple
-  def integrate_elementwise(self, funcs, *, asfunction=False, **kwargs):
+  def integrate_elementwise(self, funcs, *, degree, asfunction=False, ischeme='gauss', arguments=None):
     'element-wise integration'
 
-    ielem = function.TransformsIndexWithTail(self.transforms, function.TRANS).index
-    with matrix.Numpy():
-      retvals = self.integrate([function.Inflate(function.asarray(func)[_], dofmap=ielem[_], length=len(self), axis=0) for func in funcs], **kwargs)
-    retvals = [retval.export('dense') if len(retval.shape) == 2 else retval for retval in retvals]
-    return [function.elemwise(self.transforms, retval) for retval in retvals] if asfunction \
-      else retvals
+    retvals = [sparse.toarray(retval) for retval in self.sample(ischeme, degree).integrate_sparse(
+      [function.kronecker(func, pos=self.f_index, length=len(self), axis=0) for func in funcs], arguments=arguments)]
+    if asfunction:
+      return [function.Elemwise(retval, self.f_index, dtype=float) for retval in retvals]
+    else:
+      return retvals
 
   @util.single_or_multiple
   def elem_mean(self, funcs, geometry=None, ischeme='gauss', degree=None, **kwargs):
@@ -287,8 +309,8 @@ class Topology(types.Singleton):
       F = numpy.zeros(onto.shape[0])
       W = numpy.zeros(onto.shape[0])
       I = numpy.zeros(onto.shape[0], dtype=bool)
-      fun = function.asarray(fun).prepare_eval()
-      data = function.Tuple(function.Tuple([fun, onto_f.simplified, function.Tuple(onto_ind)]) for onto_ind, onto_f in function.blocks(onto.prepare_eval()))
+      fun = function.prepare_eval(function.asarray(fun))
+      data = function.Tuple(function.Tuple([fun, onto_f.simplified, function.Tuple(onto_ind)]) for onto_ind, onto_f in function.blocks(function.prepare_eval(onto)))
       for ref, trans, opp in zip(self.references, self.transforms, self.opposites):
         ipoints, iweights = ref.getischeme('bezier2')
         for fun_, onto_f_, onto_ind_ in data.eval(_transforms=(trans, opp), _points=ipoints, **arguments or {}):
@@ -340,7 +362,7 @@ class Topology(types.Singleton):
     if arguments is None:
       arguments = {}
 
-    levelset = levelset.prepare_eval().simplified
+    levelset = function.prepare_eval(levelset).simplified
     refs = []
     if leveltopo is None:
       with log.iter.percentage('trimming', self.references, self.transforms, self.opposites) as items:
@@ -404,7 +426,7 @@ class Topology(types.Singleton):
       ischeme = 'gauss{}'.format(degree*2)
 
     blocks = function.Tuple([function.Tuple([function.Tuple((function.Tuple(ind), f.simplified))
-      for ind, f in function.blocks(func.prepare_eval())])
+      for ind, f in function.blocks(function.prepare_eval(func))])
         for func in funcs])
 
     bases = {}
@@ -462,11 +484,13 @@ class Topology(types.Singleton):
       print('divergence check failed: {} != {}'.format(volumes, volume))
 
   def indicator(self, subtopo):
+    '''Create an indicator function for a subtopology.'''
+
     if isinstance(subtopo, str):
       subtopo = self[subtopo]
     values = numpy.zeros([len(self)], dtype=int)
     values[numpy.fromiter(map(self.transforms.index, subtopo.transforms), dtype=int)] = 1
-    return function.Get(values, axis=0, item=function.TransformsIndexWithTail(self.transforms, function.TRANS).index)
+    return function.Get(values, self.f_index)
 
   def select(self, indicator, ischeme='bezier2', **kwargs):
     sample = self.sample(*element.parse_legacy_ischeme(ischeme))
@@ -475,7 +499,7 @@ class Topology(types.Singleton):
     return self[selected]
 
   @log.withcontext
-  def locate(self, geom, coords, *, ischeme='vertex', scale=1, tol=None, eps=0, maxiter=100, arguments=None):
+  def locate(self, geom, coords, *, tol, ischeme='vertex', scale=1, eps=0, maxiter=100, arguments=None):
     '''Create a sample based on physical coordinates.
 
     In a finite element application, functions are commonly evaluated in points
@@ -490,7 +514,7 @@ class Topology(types.Singleton):
 
     >>> from . import mesh
     >>> domain, geom = mesh.unitsquare(nelems=3, etype='mixed')
-    >>> sample = domain.locate(geom, [[.9, .4]])
+    >>> sample = domain.locate(geom, [[.9, .4]], tol=1e-12)
     >>> sample.eval(geom).tolist()
     [[0.9, 0.4]]
 
@@ -525,9 +549,6 @@ class Topology(types.Singleton):
     located : :class:`nutils.sample.Sample`
     '''
 
-    if tol is None:
-      warnings.deprecation('locate without tol argument is deprecated, please provide an explicit tolerance')
-      tol = 1e-12
     coords = numpy.asarray(coords, dtype=float)
     if geom.ndim == 0:
       geom = geom[_]
@@ -535,14 +556,14 @@ class Topology(types.Singleton):
     if not geom.shape == coords.shape[1:] == (self.ndims,):
       raise Exception('invalid geometry or point shape for {}D topology'.format(self.ndims))
     bboxsample = self.sample(*element.parse_legacy_ischeme(ischeme))
-    vertices = map(bboxsample.eval(geom, **arguments or {}).__getitem__, bboxsample.index)
+    vertices = map(bboxsample.eval(geom, **arguments or {}).__getitem__, map(bboxsample.getindex, range(len(self))))
     bboxes = numpy.array([numpy.mean(v,axis=0) * (1-scale) + numpy.array([numpy.min(v,axis=0), numpy.max(v,axis=0)]) * scale
       for v in vertices]) # nelems x {min,max} x ndims
     vref = element.getsimplex(0)
     ielems = parallel.shempty(len(coords), dtype=int)
     xis = parallel.shempty((len(coords),len(geom)), dtype=float)
     J = function.localgradient(geom, self.ndims)
-    geom_J = function.Tuple((geom, J)).prepare_eval().simplified
+    geom_J = function.prepare_eval(function.Tuple((geom, J))).simplified
     with parallel.ctxrange('locating', len(coords)) as ipoints:
       for ipoint in ipoints:
         coord = coords[ipoint]
@@ -583,9 +604,12 @@ class Topology(types.Singleton):
     transforms = self.transforms[uielems],
     if len(self.transforms) == 0 or self.opposites != self.transforms:
       transforms += self.opposites[uielems],
-    return sample.Sample(transforms, points_, index)
+    points_ = PointsSequence.from_iter(points_, self.ndims)
+    return Sample.new(transforms, points_, index)
 
   def revolved(self, geom):
+    '''Create revolved topology, geometry.'''
+
     assert geom.ndim == 1
     revdomain = self * RevolutionTopology()
     angle = function.RevolutionAngle()
@@ -628,7 +652,7 @@ class Topology(types.Singleton):
               refs_touched = True
     selection = types.frozenarray(selection, int)
     if refs_touched:
-      references = elementseq.asreferences(references, self.ndims-1)
+      references = References.from_iter(references, self.ndims-1)
     else:
       references = self.references.edges[selection]
     transforms = self.transforms.edges(self.references)[selection]
@@ -663,7 +687,7 @@ class Topology(types.Singleton):
     selection = types.frozenarray(selection, int)
     oppselection = types.frozenarray(oppselection, int)
     if refs_touched:
-      references = elementseq.asreferences(references, self.ndims-1)
+      references = References.from_iter(references, self.ndims-1)
     else:
       references = self.references.edges[selection]
     return Topology(references, edges[selection], edges[oppselection])
@@ -680,7 +704,7 @@ class Topology(types.Singleton):
       coeffs = [self.references[0].get_poly_coeffs('bernstein', degree=degree)]*len(self.references)
     else:
       coeffs = [ref.get_poly_coeffs('bernstein', degree=degree) for ref in self.references]
-    return function.DiscontBasis(coeffs, self.transforms)
+    return function.DiscontBasis(coeffs, self.f_index, self.f_coords).wrapped
 
   def _basis_c0_structured(self, name, degree):
     'C^0-continuous shape functions with lagrange stucture'
@@ -718,7 +742,7 @@ class Topology(types.Singleton):
 
     elem_slices = map(slice, offsets[:-1], offsets[1:])
     dofs = tuple(types.frozenarray(dofmap[s]) for s in elem_slices)
-    return function.PlainBasis(coeffs, dofs, ndofs, self.transforms)
+    return function.PlainBasis(coeffs, dofs, ndofs, self.f_index, self.f_coords).wrapped
 
   def basis_lagrange(self, degree):
     'lagrange shape functions'
@@ -840,7 +864,7 @@ class EmptyTopology(Topology):
 
   @types.apply_annotations
   def __init__(self, ndims:types.strictint):
-    super().__init__(elementseq.EmptyReferences(ndims), transformseq.EmptyTransforms(ndims), transformseq.EmptyTransforms(ndims))
+    super().__init__(References.empty(ndims), transformseq.EmptyTransforms(ndims), transformseq.EmptyTransforms(ndims))
 
   def __or__(self, other):
     assert self.ndims == other.ndims
@@ -862,7 +886,7 @@ class Point(Topology):
   @_preprocess_init
   def __init__(self, trans, opposite):
     assert trans[-1].fromdims == 0
-    references = elementseq.asreferences([element.getsimplex(0)], 0)
+    references = References.uniform(element.getsimplex(0), 1)
     transforms = transformseq.PlainTransforms((trans,), 0)
     opposites = transforms if opposite is None else transformseq.PlainTransforms((opposite,), 0)
     super().__init__(references, transforms, opposites)
@@ -890,7 +914,7 @@ class StructuredTopology(Topology):
     self.shape = tuple(axis.j - axis.i for axis in self.axes if axis.isdim)
     self._bnames = bnames
 
-    references = elementseq.asreferences([util.product(element.getsimplex(1 if axis.isdim else 0) for axis in self.axes)], len(self.shape))*len(self)
+    references = References.uniform(util.product(element.getsimplex(1 if axis.isdim else 0) for axis in self.axes), len(self))
     transforms = transformseq.StructuredTransforms(self.root, self.axes, self.nrefine)
     nbounds = len(self.axes) - len(self.shape)
     if nbounds == 0:
@@ -976,7 +1000,7 @@ class StructuredTopology(Topology):
       oppaxes = (*self.axes[:idim], intaxis(False), *self.axes[idim+1:])
       itransforms = transformseq.StructuredTransforms(self.root, axes, self.nrefine)
       iopposites = transformseq.StructuredTransforms(self.root, oppaxes, self.nrefine)
-      ireferences = elementseq.asreferences([util.product(element.getsimplex(1 if a.isdim else 0) for a in axes)], self.ndims-1)*len(itransforms)
+      ireferences = References.uniform(util.product(element.getsimplex(1 if a.isdim else 0) for a in axes), len(itransforms))
       itopos.append(Topology(ireferences, itransforms, iopposites))
     assert len(itopos) == self.ndims
     return DisjointUnionTopology(itopos, names=['dir{}'.format(idim) for idim in range(self.ndims)])
@@ -1217,7 +1241,7 @@ class StructuredTopology(Topology):
       coeffs.append(tuple(coeffs_i))
 
     transforms_shape = tuple(axis.j-axis.i for axis in self.axes if axis.isdim)
-    func = function.StructuredBasis(coeffs, start_dofs, stop_dofs, dofshape, self.transforms, transforms_shape)
+    func = function.StructuredBasis(coeffs, start_dofs, stop_dofs, dofshape, transforms_shape, self.f_index, self.f_coords).wrapped
     if not any(removedofs):
       return func
 
@@ -1277,10 +1301,7 @@ class StructuredTopology(Topology):
         else transformseq.BndAxis(i=axis.i*2,j=axis.j*2,ibound=axis.ibound,side=axis.side) for axis in self.axes]
     return StructuredTopology(self.root, axes, self.nrefine+1, bnames=self._bnames)
 
-  def locate(self, geom, coords, *, eps=0, tol=None, **kwargs):
-    if tol is None:
-      warnings.deprecation('locate without tol argument is deprecated, please provide an explicit tolerance')
-      tol = 1e-12
+  def locate(self, geom, coords, *, tol, eps=0, **kwargs):
     coords = numpy.asarray(coords, dtype=float)
     if geom.ndim == 0:
       geom = geom[_]
@@ -1316,7 +1337,7 @@ class ConnectedTopology(Topology):
   __slots__ = 'connectivity',
 
   @types.apply_annotations
-  def __init__(self, references:elementseq.strictreferences, transforms:transformseq.stricttransforms, opposites:transformseq.stricttransforms, connectivity):
+  def __init__(self, references:types.strict[References], transforms:transformseq.stricttransforms, opposites:transformseq.stricttransforms, connectivity):
     assert len(connectivity) == len(references) and all(len(c) == e.nedges for c, e in zip(connectivity, references))
     self.connectivity = connectivity
     super().__init__(references, transforms, opposites)
@@ -1339,7 +1360,7 @@ class SimplexTopology(Topology):
     assert numpy.greater(simplices[:,1:], simplices[:,:-1]).all(), 'nodes should be sorted'
     assert not numpy.equal(simplices[:,1:], simplices[:,:-1]).all(), 'duplicate nodes'
     self.simplices = simplices
-    references = elementseq.asreferences([element.getsimplex(transforms.fromdims)], transforms.fromdims)*len(transforms)
+    references = References.uniform(element.getsimplex(transforms.fromdims), len(transforms))
     super().__init__(references, transforms, opposites)
 
   @property
@@ -1360,7 +1381,7 @@ class SimplexTopology(Topology):
   def basis_std(self, degree):
     if degree == 1:
       coeffs = element.getsimplex(self.ndims).get_poly_coeffs('bernstein', degree=1)
-      return function.PlainBasis([coeffs] * len(self), self.simplices, self.simplices.max()+1, self.transforms)
+      return function.PlainBasis([coeffs] * len(self), self.simplices, self.simplices.max()+1, self.f_index, self.f_coords).wrapped
     return super().basis_std(degree)
 
   def basis_bubble(self):
@@ -1376,7 +1397,7 @@ class SimplexTopology(Topology):
     nverts = self.simplices.max() + 1
     ndofs = nverts + len(self)
     nmap = [types.frozenarray(numpy.hstack([idofs, nverts+ielem]), copy=False) for ielem, idofs in enumerate(self.simplices)]
-    return function.PlainBasis([coeffs] * len(self), nmap, ndofs, self.transforms)
+    return function.PlainBasis([coeffs] * len(self), nmap, ndofs, self.f_index, self.f_coords).wrapped
 
 class UnionTopology(Topology):
   'grouped topology'
@@ -1420,7 +1441,7 @@ class UnionTopology(Topology):
     selections = tuple(map(types.frozenarray[int], selections))
 
     super().__init__(
-      elementseq.asreferences(references, ndims),
+      References.from_iter(references, ndims),
       transformseq.chain((topo.transforms[selection] for topo, selection in zip(topos, selections)), ndims),
       transformseq.chain((topo.opposites[selection] for topo, selection in zip(topos, selections)), ndims))
 
@@ -1450,7 +1471,7 @@ class DisjointUnionTopology(Topology):
     ndims = self._topos[0].ndims
     assert all(topo.ndims == ndims for topo in self._topos)
     super().__init__(
-      elementseq.chain((topo.references for topo in self._topos), ndims),
+      util.sum(topo.references for topo in self._topos),
       transformseq.chain((topo.transforms for topo in self._topos), ndims),
       transformseq.chain((topo.opposites for topo in self._topos), ndims))
 
@@ -1484,7 +1505,7 @@ class SubsetTopology(Topology):
     self.newboundary = newboundary
 
     self._indices = types.frozenarray(numpy.array([i for i, ref in enumerate(self.refs) if ref], dtype=int), copy=False)
-    references = elementseq.asreferences(self.refs, self.basetopo.ndims)[self._indices]
+    references = References.from_iter(self.refs, self.basetopo.ndims).take(self._indices)
     transforms = self.basetopo.transforms[self._indices]
     opposites = self.basetopo.opposites[self._indices]
     super().__init__(references, transforms, opposites)
@@ -1568,7 +1589,7 @@ class SubsetTopology(Topology):
         trimmedbrefs[self.newboundary.transforms.index(trans)] = ref
       trimboundary = SubsetTopology(self.newboundary, trimmedbrefs)
     else:
-      trimboundary = Topology(elementseq.asreferences(trimmedreferences, self.ndims-1), transformseq.PlainTransforms(trimmedtransforms, self.ndims-1), transformseq.PlainTransforms(trimmedopposites, self.ndims-1))
+      trimboundary = Topology(References.from_iter(trimmedreferences, self.ndims-1), transformseq.PlainTransforms(trimmedtransforms, self.ndims-1), transformseq.PlainTransforms(trimmedopposites, self.ndims-1))
     return DisjointUnionTopology([trimboundary, origboundary], names=[self.newboundary] if isinstance(self.newboundary,str) else [])
 
   @property
@@ -1589,17 +1610,17 @@ class SubsetTopology(Topology):
     if isinstance(self.basetopo, HierarchicalTopology):
       warnings.warn('basis may be linearly dependent; a linearly indepent basis is obtained by trimming first, then creating hierarchical refinements')
     basis = self.basetopo.basis(name, *args, **kwargs)
-    return function.PrunedBasis(basis, self._indices)
+    return function.PrunedBasis(basis, self._indices, self.f_index, self.f_coords).wrapped
 
   def locate(self, geom, coords, *, eps=0, **kwargs):
     sample = self.basetopo.locate(geom, coords, eps=eps, **kwargs)
-    for transforms, points, index in zip(sample.transforms[0], sample.points, sample.index):
+    for isampleelem, (transforms, points) in enumerate(zip(sample.transforms[0], sample.points)):
       ielem = self.basetopo.transforms.index(transforms)
       ref = self.refs[ielem]
       if ref != self.basetopo.references[ielem]:
         for i, coord in enumerate(points.coords):
           if not ref.inside(coord, eps):
-            raise LocateError('failed to locate point: {}'.format(coords[index[i]]))
+            raise LocateError('failed to locate point: {}'.format(coords[sample.getindex(isampleelem)[i]]))
     return sample
 
 class RefinedTopology(Topology):
@@ -1656,19 +1677,19 @@ class HierarchicalTopology(Topology):
 
     level = None
     levels = []
-    references = []
+    references = References.empty(basetopo.ndims)
     transforms = []
     opposites = []
     for indices in indices_per_level:
       level = self.basetopo if level is None else level.refined
       levels.append(level)
       if len(indices):
-        references.append(level.references[indices])
+        references = references.chain(level.references.take(indices))
         transforms.append(level.transforms[indices])
         opposites.append(level.opposites[indices])
     self.levels = tuple(levels)
 
-    super().__init__(elementseq.chain(references, basetopo.ndims), transformseq.chain(transforms, basetopo.ndims), transformseq.chain(opposites, basetopo.ndims))
+    super().__init__(references, transformseq.chain(transforms, basetopo.ndims), transformseq.chain(opposites, basetopo.ndims))
 
   def getitem(self, item):
     itemtopo = self.basetopo.getitem(item)
@@ -1745,7 +1766,7 @@ class HierarchicalTopology(Topology):
   def interfaces(self):
     'interfaces'
 
-    hreferences = []
+    hreferences = References.empty(self.ndims-1)
     htransforms = []
     hopposites = []
     for level, indices in zip(self.levels, self._indices_per_level):
@@ -1765,10 +1786,10 @@ class HierarchicalTopology(Topology):
             break
       if selection:
         selection = types.frozenarray(numpy.unique(selection))
-        hreferences.append(level.interfaces.references[selection])
+        hreferences = hreferences.chain(level.interfaces.references.take(selection))
         htransforms.append(level.interfaces.transforms[selection])
         hopposites.append(level.interfaces.opposites[selection])
-    return Topology(elementseq.chain(hreferences, self.ndims-1), transformseq.chain(htransforms, self.ndims-1), transformseq.chain(hopposites, self.ndims-1))
+    return Topology(hreferences, transformseq.chain(htransforms, self.ndims-1), transformseq.chain(hopposites, self.ndims-1))
 
   @log.withcontext
   def basis(self, name, *args, truncation_tolerance=1e-15, **kwargs):
@@ -1839,7 +1860,6 @@ class HierarchicalTopology(Topology):
         prev_transforms = topo.transforms
 
         basis_i = topo.basis(name, *args, **kwargs)
-        assert isinstance(basis_i, function.Basis)
         ubases.insert(0, basis_i)
         # Basis functions that have at least one touchelem in their support.
         touchdofs_i = basis_i.get_dofs(touchielems_i)
@@ -1916,7 +1936,7 @@ class HierarchicalTopology(Topology):
         hbasis_dofs.append(numpy.concatenate(trans_dofs))
         hbasis_coeffs.append(numeric.poly_concatenate(trans_coeffs))
 
-    return function.PlainBasis(hbasis_coeffs, hbasis_dofs, ndofs, self.transforms)
+    return function.PlainBasis(hbasis_coeffs, hbasis_dofs, ndofs, self.f_index, self.f_coords).wrapped
 
 class ProductTopology(Topology):
   'product topology'
@@ -1987,7 +2007,7 @@ class RevolutionTopology(Topology):
     self._root = transform.Identifier(1, 'angle')
     self.boundary = EmptyTopology(ndims=0)
     transforms = transformseq.PlainTransforms([(self._root,)], 1)
-    references = elementseq.asreferences([element.RevolutionReference()], 1)
+    references = References.uniform(element.RevolutionReference(), 1)
     super().__init__(references, transforms, transforms)
 
   @property
@@ -2078,7 +2098,7 @@ class MultipatchTopology(Topology):
         raise NotImplementedError('patch interfaces must have the same order of axes and the same orientation per axis')
 
     super().__init__(
-      elementseq.chain([patch.topo.references for patch in self.patches], self.patches[0].topo.ndims),
+      util.sum(patch.topo.references for patch in self.patches),
       transformseq.chain([patch.topo.transforms for patch in self.patches], self.patches[0].topo.ndims),
       transformseq.chain([patch.topo.opposites for patch in self.patches], self.patches[0].topo.ndims))
 
@@ -2175,8 +2195,8 @@ class MultipatchTopology(Topology):
           raise 'ambiguous knot values for patch {}, dimension {}'.format(ipatch, idim)
         if len(dimknotmultiplicities) != 1:
           raise 'ambiguous knot multiplicities for patch {}, dimension {}'.format(ipatch, idim)
-        patchknotvalues.append(next(iter(dimknotvalues)))
-        patchknotmultiplicities.append(next(iter(dimknotmultiplicities)))
+        patchknotvalues.extend(dimknotvalues)
+        patchknotmultiplicities.extend(dimknotmultiplicities)
       patchcoeffs, patchdofmap, patchdofcount = patch.topo._basis_spline(degree, knotvalues=patchknotvalues, knotmultiplicities=patchknotmultiplicities, continuity=continuity)
       coeffs.extend(patchcoeffs)
       dofmap.extend(types.frozenarray(dofs+dofcount, copy=False) for dofs in patchdofmap)
@@ -2193,26 +2213,25 @@ class MultipatchTopology(Topology):
     if patchcontinuous:
       # build merge mapping: merge common boundary dofs (from low to high)
       pairs = itertools.chain(*(zip(*dofs) for dofs in commonboundarydofs.values() if len(dofs) > 1))
-      merge = {}
+      merge = numpy.arange(dofcount)
       for dofs in sorted(pairs):
-        dst = merge.get(dofs[0], dofs[0])
-        for src in dofs[1:]:
-          merge[src] = dst
+        merge[list(dofs)] = merge[list(dofs)].min()
+      assert all(numpy.all(merge[a] == merge[b]) for a, *B in commonboundarydofs.values() for b in B), 'something went wrong is merging interface dofs; this should not have happened'
       # build renumber mapping: renumber remaining dofs consecutively, starting at 0
-      remainder = set(merge.get(dof, dof) for dof in range(dofcount))
-      renumber = dict(zip(sorted(remainder), range(len(remainder))))
+      remainder, renumber = numpy.unique(merge, return_inverse=True)
       # apply mappings
-      dofmap = tuple(types.frozenarray(tuple(renumber[merge.get(dof, dof)] for dof in v.flat), dtype=int).reshape(v.shape) for v in dofmap)
+      dofmap = tuple(types.frozenarray(renumber[v], copy=False) for v in dofmap)
       dofcount = len(remainder)
 
-    return function.PlainBasis(coeffs, dofmap, dofcount, self.transforms)
+    return function.PlainBasis(coeffs, dofmap, dofcount, self.f_index, self.f_coords).wrapped
 
   def basis_patch(self):
     'degree zero patchwise discontinuous basis'
 
-    return function.DiscontBasis(
-      [types.frozenarray(1, dtype=int).reshape(1, *(1,)*self.ndims)]*len(self.patches),
-      transformseq.PlainTransforms(tuple((patch.topo.root,) for patch in self.patches), self.ndims))
+    transforms = transformseq.PlainTransforms(tuple((patch.topo.root,) for patch in self.patches), self.ndims)
+    index, tail = function.TransformsIndexWithTail(transforms, function.TRANS)
+    coords = function.ApplyTransforms(tail)
+    return function.DiscontBasis([types.frozenarray(1, dtype=int).reshape(1, *(1,)*self.ndims)]*len(self.patches), index, coords).wrapped
 
   @property
   def boundary(self):
@@ -2263,7 +2282,7 @@ class MultipatchTopology(Topology):
         transforms = boundary.apply_transform(transforms)[..., 0]
         pairs.append(tuple(transforms.flat))
       # create structured topology of joined element pairs
-      references = elementseq.asreferences(references, self.ndims-1)
+      references = References.from_iter(references, self.ndims-1)
       transforms, opposites = pairs
       transforms = transformseq.PlainTransforms(transforms, self.ndims-1)
       opposites = transformseq.PlainTransforms(opposites, self.ndims-1)

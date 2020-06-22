@@ -1,20 +1,20 @@
-import unittest, os, multiprocessing, time
-from nutils import parallel
+import unittest, os, multiprocessing, time, sys, warnings as _builtin_warnings
+from nutils import parallel, testing, warnings
 
 canfork = hasattr(os, 'fork')
 
-class Test(unittest.TestCase):
+@unittest.skipIf(sys.platform == 'darwin', 'fork is unreliable (in combination with matplotlib)')
+class Test(testing.TestCase):
 
   def setUp(self):
-    parallel._maxprocs = 3
-
-  def tearDown(self):
-    parallel._maxprocs = 1
+    super().setUp()
+    self.enter_context(parallel.maxprocs(3))
+    _builtin_warnings.filterwarnings('ignore', 'fork is unavailable on this platform', warnings.NutilsWarning)
 
   def test_maxprocs(self):
     with parallel.maxprocs(4):
-      self.assertEqual(parallel._maxprocs, 4)
-    self.assertEqual(parallel._maxprocs, 3)
+      self.assertEqual(parallel._maxprocs.value, 4)
+    self.assertEqual(parallel._maxprocs.value, 3)
 
   def test_fork(self):
     mask = multiprocessing.RawValue('i', 0)

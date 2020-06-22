@@ -1,5 +1,6 @@
 from nutils import *
 from nutils.testing import *
+from nutils.elementseq import References
 import numpy, copy, sys, pickle, subprocess, base64, itertools, os
 
 class TopologyAssertions:
@@ -30,8 +31,8 @@ class TopologyAssertions:
           imask[index] += 1
           self.assertEqual(eref, opperef)
           points = eref.getpoints('gauss', 2).coords
-          a0 = geom.prepare_eval().eval(_transforms=[trans], _points=points)
-          a1 = geom.prepare_eval().eval(_transforms=[opptrans], _points=points)
+          a0 = function.prepare_eval(geom).eval(_transforms=[trans], _points=points)
+          a1 = function.prepare_eval(geom).eval(_transforms=[opptrans], _points=points)
           numpy.testing.assert_array_almost_equal(a0, a1)
     self.assertTrue(numpy.equal(bmask, 1).all())
     self.assertTrue(numpy.equal(imask, 2).all())
@@ -102,6 +103,7 @@ for ndims in range(1, 4):
 class structure(TestCase, TopologyAssertions):
 
   def setUp(self):
+    super().setUp()
     domain, self.geom = mesh.rectilinear([[-1,0,1]]*self.ndims)
     self.domain = domain.refine(self.refine)
 
@@ -289,7 +291,7 @@ class refined(TestCase):
   def test_boundary_gradient(self):
     ref = _refined_refs[self.etype]
     trans = (transform.Identifier(ref.ndims, 'root'),)
-    domain = topology.ConnectedTopology(elementseq.asreferences([ref], ref.ndims), transformseq.PlainTransforms([trans], ref.ndims), transformseq.PlainTransforms([trans], ref.ndims), ((-1,)*ref.nedges,)).refine(self.ref0)
+    domain = topology.ConnectedTopology(References.uniform(ref, 1), transformseq.PlainTransforms([trans], ref.ndims), transformseq.PlainTransforms([trans], ref.ndims), ((-1,)*ref.nedges,)).refine(self.ref0)
     geom = function.rootcoords(ref.ndims)
     basis = domain.basis('std', degree=1)
     u = domain.projection(geom.sum(), onto=basis, geometry=geom, degree=2)
@@ -348,6 +350,15 @@ class general(TestCase):
       self.assertEqual(self.domain.connectivity[ielem][iedge], ioppelem)
       self.assertEqual(self.domain.connectivity[ioppelem][ioppedge], ielem)
 
+  def test_integrate_elementwise(self):
+    v = self.domain.integrate_elementwise(self.geom, degree=2)
+    self.assertEqual(v.shape, (len(self.domain), len(self.geom)))
+    vtot = self.domain.integrate(self.geom, degree=2)
+    self.assertAllAlmostEqual(v.sum(axis=0), vtot)
+    vf = self.domain.integrate_elementwise(self.geom, degree=2, asfunction=True)
+    v_ = self.domain.sample('uniform', 1).eval(vf)
+    self.assertAllAlmostEqual(v, v_)
+
 for isstructured in True, False:
   for periodic in False, 0, 1, 2:
     general(isstructured=isstructured, periodic=periodic)
@@ -357,6 +368,7 @@ for isstructured in True, False:
 class locate(TestCase):
 
   def setUp(self):
+    super().setUp()
     domain, geom = mesh.unitsquare(4, etype=self.etype)
     if self.mode == 'nonlinear':
       geom = function.sin(geom * numpy.pi / 2) # nonlinear map from [0,1] to [0,1]
@@ -368,39 +380,35 @@ class locate(TestCase):
 
   def test(self):
     target = numpy.array([(.2,.3), (.1,.9), (0,1)])
-    with parallel.maxprocs(self.nprocs):
-      sample = self.domain.locate(self.geom, target, eps=1e-15)
+    sample = self.domain.locate(self.geom, target, eps=1e-15, tol=1e-12)
     located = sample.eval(self.geom)
     self.assertAllAlmostEqual(located, target)
 
   def test_invalidargs(self):
     target = numpy.array([(.2,), (.1,), (0,)])
-    with parallel.maxprocs(self.nprocs), self.assertRaises(Exception):
-      self.domain.locate(self.geom, target, eps=1e-15)
+    with self.assertRaises(Exception):
+      self.domain.locate(self.geom, target, eps=1e-15, tol=1e-12)
 
   def test_invalidpoint(self):
     target = numpy.array([(.3, 1)]) # outside domain, but inside basetopo for mode==trimmed
-    with parallel.maxprocs(self.nprocs), self.assertRaises(topology.LocateError):
-      self.domain.locate(self.geom, target, eps=1e-15)
+    with self.assertRaises(topology.LocateError):
+      self.domain.locate(self.geom, target, eps=1e-15, tol=1e-12)
 
   def test_boundary(self):
     target = numpy.array([(.2,), (.1,), (0,)])
-    with parallel.maxprocs(self.nprocs):
-      sample = self.domain.boundary['bottom'].locate(self.geom[:1], target, eps=1e-15)
+    sample = self.domain.boundary['bottom'].locate(self.geom[:1], target, eps=1e-15, tol=1e-12)
     located = sample.eval(self.geom[:1])
     self.assertAllAlmostEqual(located, target)
 
   def test_boundary_scalar(self):
     target = numpy.array([.3, .9, 1])
-    with parallel.maxprocs(self.nprocs):
-      sample = self.domain.boundary['left'].locate(self.geom[1], target, eps=1e-15)
+    sample = self.domain.boundary['left'].locate(self.geom[1], target, eps=1e-15, tol=1e-12)
     located = sample.eval(self.geom[1])
     self.assertAllAlmostEqual(located, target)
 
 for etype in 'square', 'triangle', 'mixed':
   for mode in 'linear', 'nonlinear', 'trimmed':
-    for nprocs in [1, 2]:
-      locate(etype=etype, mode=mode, nprocs=nprocs)
+    locate(etype=etype, mode=mode, tol=1e-12)
 
 
 @parametrize
@@ -639,7 +647,7 @@ class common(TestCase):
 
 common(
   'Topology',
-  topo=topology.Topology(elementseq.asreferences([element.PointReference()], 0), transformseq.PlainTransforms([(transform.Identifier(0, 'test'),)], 0), transformseq.PlainTransforms([(transform.Identifier(0, 'test'),)], 0)),
+  topo=topology.Topology(References.uniform(element.PointReference(), 1), transformseq.PlainTransforms([(transform.Identifier(0, 'test'),)], 0), transformseq.PlainTransforms([(transform.Identifier(0, 'test'),)], 0)),
   hasboundary=False)
 common(
   'StructuredTopology:2D',

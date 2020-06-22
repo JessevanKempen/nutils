@@ -1,11 +1,13 @@
-from nutils import numeric
+from nutils import numeric, util
 import numpy
 from nutils.testing import *
+import itertools
 
 @parametrize
 class pack(TestCase):
 
   def setUp(self):
+    super().setUp()
     assert self.nbits in (8, 16, 32)
     self.dtype = numpy.dtype('int{}'.format(self.nbits))
     self.nnan, self.nnil, self.nmin, self.nmax, self.ninf = n = numpy.array(
@@ -131,3 +133,67 @@ class asboolean(TestCase):
     self.assertAllEqual(numeric.asboolean([2,1], 3, ordered=False), [False, True, True])
     with self.assertRaises(Exception):
       numeric.asboolean([2,1], 3)
+
+class types:
+
+  def test_isint(self):
+    self.assertTrue(numeric.isint(1))
+    self.assertTrue(numeric.isint(numpy.array(1)))
+    self.assertTrue(numeric.isint(numpy.int32(1)))
+    self.assertTrue(numeric.isint(numpy.uint32(1)))
+    self.assertFalse(numeric.isint(1.5))
+    self.assertFalse(numeric.isint(numpy.array([1])))
+
+  def test_isbool(self):
+    self.assertTrue(numeric.isbool(True))
+    self.assertTrue(numeric.isbool(numpy.bool(True)))
+    self.assertTrue(numeric.isbool(numpy.array(True)))
+    self.assertFalse(numeric.isbool(numpy.array([True])))
+
+  def test_isnumber(self):
+    self.assertTrue(numeric.isnumber(1))
+    self.assertTrue(numeric.isnumber(numpy.array(1)))
+    self.assertTrue(numeric.isnumber(numpy.int32(1)))
+    self.assertTrue(numeric.isnumber(numpy.uint32(1)))
+    self.assertTrue(numeric.isnumber(1.5))
+    self.assertTrue(numeric.isnumber(numpy.float64(1.5)))
+    self.assertTrue(numeric.isnumber(numpy.array(1.5)))
+    self.assertFalse(numeric.isnumber(numpy.array([1])))
+
+  def test_isarray(self):
+    self.assertTrue(numeric.isarray(numpy.array([1,2,3])))
+    self.assertTrue(numeric.isarray(types.frozenarray([1,2,3])))
+    self.assertTrue(numeric.isarray(numpy.array(1)))
+    self.assertTrue(numeric.isarray(types.frozenarray(1)))
+
+  def test_isboolarray(self):
+    self.assertTrue(numeric.isboolarray(numpy.array(True)))
+    self.assertTrue(numeric.isboolarray(numpy.array([True])))
+    self.assertTrue(numeric.isboolarray(types.frozenarray([True])))
+    self.assertFalse(numeric.isboolarray(numpy.array([1])))
+    self.assertFalse(numeric.isboolarray(True))
+
+  def test_isboolarray(self):
+    self.assertTrue(numeric.isintarray(numpy.array(1)))
+    self.assertTrue(numeric.isintarray(numpy.array([1])))
+    self.assertTrue(numeric.isintarray(types.frozenarray([1])))
+    self.assertFalse(numeric.isintarray(numpy.array([1.5])))
+    self.assertFalse(numeric.isintarray(1.5))
+
+class levicivita(TestCase):
+
+  def test_1d(self):
+    with self.assertRaisesRegex(ValueError, '^The Levi-Civita symbol is undefined for dimensions lower than 2.'):
+      numeric.levicivita(1)
+
+  def test_2d(self):
+    self.assertAllEqual(numeric.levicivita(2, int), numpy.array([[0, 1], [-1, 0]]))
+
+  def test_nd(self):
+    sign = lambda v: -1 if v < 0 else 1 if v > 0 else 0
+    for n in range(2, 6):
+      with self.subTest(n=n):
+        desired = numpy.empty((n,)*n, int)
+        for I in itertools.product(*[range(n)]*n):
+          desired[I] = util.product(sign(b-a) for a, b in itertools.combinations(I, 2))
+        self.assertAllEqual(numeric.levicivita(n, int), desired)

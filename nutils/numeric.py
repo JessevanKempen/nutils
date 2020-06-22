@@ -170,8 +170,8 @@ def inv(A):
 isarray = lambda a: isinstance(a, (numpy.ndarray, types.frozenarray))
 isboolarray = lambda a: isarray(a) and a.dtype == bool
 isbool = lambda a: isboolarray(a) and a.ndim == 0 or type(a) == bool
-isint = lambda a: isinstance(a, (numbers.Integral,numpy.integer))
-isnumber = lambda a: isinstance(a, (numbers.Number,numpy.generic))
+isint = lambda a: isinstance(a, numbers.Integral)
+isnumber = lambda a: isinstance(a, numbers.Number)
 isintarray = lambda a: isarray(a) and numpy.issubdtype(a.dtype, numpy.integer)
 asobjvector = lambda v: numpy.array((None,)+tuple(v), dtype=object)[1:] # 'None' prevents interpretation of objects as axes
 
@@ -520,14 +520,26 @@ def asboolean(array, size, ordered=True):
     barray[array] = True
   return barray
 
-if numpy.version.version >= '1.15':
-  intersect1d = numpy.intersect1d
-else:
-  def intersect1d(arr1, arr2, assume_unique=False, return_indices=False):
-    # unoptimized fallback for backwards compatibility with numpy < 1.15
-    isect = numpy.intersect1d(arr1, arr2, assume_unique=assume_unique)
-    if not return_indices:
-      return isect
-    return isect, numpy.fromiter(map(tuple(arr1).index, isect), dtype=int), numpy.fromiter(map(tuple(arr2).index, isect), dtype=int)
+def levicivita(n: int, dtype=float):
+  'n-dimensional Levi-Civita symbol.'
+  if n < 2:
+    raise ValueError('The Levi-Civita symbol is undefined for dimensions lower than 2.')
+  # Generate all possible permutations of `{0,1,...,n-1}` in array `I`, where
+  # the second axis runs over the permutations, and determine the number of
+  # permutations (`nperms`). First, `I[k] ∈ {k,...,n-1}` becomes the index of
+  # dimension `k` for the partial permutation `I[k:]`.
+  I = numpy.mgrid[tuple(slice(k, n) for k in range(n))].reshape(n, -1)
+  # The number of permutations is equal to the number of deviations from the
+  # unpermuted case.
+  nperms = numpy.sum(numpy.not_equal(I, numpy.arange(n)[:,None]), 0)
+  # Make all partial permutations `I[k+1:]` unique by replacing `I[j]` with `k`
+  # if `I[j]` equals `I[k]`, `j > k`. Example with `n = 4`: if `I[2:] = [3,2]` and
+  # `I[1] = 2` then `I[3]` must be replaced with `1` to give `I[1:] = [2,3,1]`.
+  for k in reversed(range(n-1)):
+    I[k+1:][numpy.equal(I[k+1:], I[k,None])] = k
+  # Inflate with `1` if `nperms` is even and `-1` if odd.
+  result = numpy.zeros((n,)*n, dtype=dtype)
+  result[tuple(I)] = 1 - 2*(nperms % 2)
+  return result
 
 # vim:sw=2:sts=2:et

@@ -22,20 +22,36 @@ import sys, numpy
 from distutils.version import LooseVersion
 
 assert sys.version_info >= (3, 5)
-assert LooseVersion(numpy.version.version) >= LooseVersion('1.8'), 'nutils requires numpy 1.8 or higher, got {}'.format(numpy.version.version)
+assert LooseVersion(numpy.version.version) >= LooseVersion('1.15'), 'nutils requires numpy 1.15 or higher, got {}'.format(numpy.version.version)
 
-version = '6.0a0'
+version = '7.0a0'
 version_name = None
 long_version = ('{} "{}"' if version_name else '{}').format(version, version_name)
 
-_ = numpy.newaxis
-__all__ = ['_', 'numpy', 'numeric', 'element', 'elementseq', 'function', 'expression',
-  'mesh', 'topology', 'util', 'matrix', 'parallel', 'log',
-  'cache', 'transform', 'transformseq', 'solver', 'cli', 'warnings', 'types', 'points',
-  'sample', 'export', 'testing']
-
-from . import numeric, element, function, expression, mesh, topology, util, \
-  matrix, parallel, log, cache, transform, solver, cli, warnings, \
-  types, points, sample, export, testing
+__all__ = [
+  'cache',
+  'cli',
+  'element',
+  'elementseq',
+  'export',
+  'expression',
+  'function',
+  'matrix',
+  'mesh',
+  'numeric',
+  'parallel',
+  'points',
+  'pointsseq',
+  'sample',
+  'solver',
+  'sparse',
+  'testing',
+  'topology',
+  'transform',
+  'transformseq',
+  'types',
+  'util',
+  'warnings',
+]
 
 # vim:sw=2:sts=2:et

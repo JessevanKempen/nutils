@@ -38,15 +38,15 @@ def main(nelems:int, etype:str, btype:str, degree:int, poisson:float, angle:floa
     domain = domain.trim(function.norm2(geom-.5)-.2, maxrefine=2)
   bezier = domain.sample('bezier', 5)
 
-  ns = function.Namespace()
+  ns = function.Namespace(fallback_length=domain.ndims)
   ns.x = geom
   ns.angle = angle * numpy.pi / 180
   ns.lmbda = 2 * poisson
   ns.mu = 1 - 2 * poisson
-  ns.ubasis = domain.basis(btype, degree=degree).vector(2)
-  ns.u_i = 'ubasis_ki ?lhs_k'
+  ns.ubasis = domain.basis(btype, degree=degree)
+  ns.u_i = 'ubasis_k ?lhs_ki'
   ns.X_i = 'x_i + u_i'
-  ns.strain_ij = '.5 (u_i,j + u_j,i)'
+  ns.strain_ij = '.5 (d(u_i, x_j) + d(u_j, x_i))'
   ns.energy = 'lmbda strain_ii strain_jj + 2 mu strain_ij strain_ij'
 
   sqr = domain.boundary['left'].integral('u_k u_k d:x' @ ns, degree=degree*2)
@@ -58,11 +58,11 @@ def main(nelems:int, etype:str, btype:str, degree:int, poisson:float, angle:floa
   X, energy = bezier.eval(['X_i', 'energy'] @ ns, lhs=lhs0)
   export.triplot('linear.png', X, energy, tri=bezier.tri, hull=bezier.hull)
 
-  ns.strain_ij = '.5 (u_i,j + u_j,i + u_k,i u_k,j)'
+  ns.strain_ij = '.5 (d(u_i, x_j) + d(u_j, x_i) + d(u_k, x_i) d(u_k, x_j))'
   ns.energy = 'lmbda strain_ii strain_jj + 2 mu strain_ij strain_ij'
 
   energy = domain.integral('energy d:x' @ ns, degree=degree*2)
-  lhs1 = solver.minimize('lhs', energy, lhs0=lhs0, constrain=cons).solve(restol)
+  lhs1 = solver.minimize('lhs', energy, arguments=dict(lhs=lhs0), constrain=cons).solve(restol)
   X, energy = bezier.eval(['X_i', 'energy'] @ ns, lhs=lhs1)
   export.triplot('nonlinear.png', X, energy, tri=bezier.tri, hull=bezier.hull)
 

@@ -28,22 +28,15 @@ will disable and a warning is printed.
 from . import numeric, warnings, util
 import os, multiprocessing, mmap, signal, contextlib, builtins, numpy, treelog
 
-_maxprocs = 1
+_maxprocs = util.settable(1)
 
-@contextlib.contextmanager
 @util.positional_only
 def maxprocs(new: int):
   '''limit number of processes for fork.'''
 
   if not isinstance(new, int) or new < 1:
     raise ValueError('nprocs requires a positive integer argument')
-  global _maxprocs
-  old = _maxprocs
-  _maxprocs = new
-  try:
-    yield
-  finally:
-    _maxprocs = old
+  return _maxprocs.sets(new)
 
 @contextlib.contextmanager
 def fork(nprocs=None):
@@ -55,9 +48,9 @@ def fork(nprocs=None):
   limiting nprocs to 1; all secondary forks will be silently ignored.
   '''
 
-  if nprocs is None or nprocs > _maxprocs:
-    nprocs = _maxprocs
-  if nprocs == 1:
+  if nprocs is None or nprocs > _maxprocs.value:
+    nprocs = _maxprocs.value
+  if nprocs <= 1:
     yield 0
     return
   if not hasattr(os, 'fork'):
@@ -105,8 +98,8 @@ def shempty(shape, dtype=float):
   else:
     assert all(numeric.isint(sh) for sh in shape)
   dtype = numpy.dtype(dtype)
-  size = (numpy.product(shape) if shape else 1) * dtype.itemsize
-  if size == 0 or _maxprocs == 1:
+  size = util.product(map(int, shape), int(dtype.itemsize))
+  if size == 0 or _maxprocs.value == 1:
     return numpy.empty(shape, dtype)
   # `mmap(-1,...)` will allocate *anonymous* memory.  Although linux' man page
   # mmap(2) states that anonymous memory is initialized to zero, we can't rely
@@ -143,8 +136,8 @@ def ctxrange(name, nitems):
   '''fork and yield shared range-like counter with percentage-style logging'''
 
   rng = range(nitems) # shared range, must be created pre-fork
-  with fork(nitems):
-    yield treelog.iter.wrap(_pct(name, nitems), rng)
+  with fork(nitems), treelog.iter.wrap(_pct(name, nitems), rng) as wrprng:
+    yield wrprng
 
 def _pct(name, n):
   '''helper function for ctxrange'''
