@@ -85,12 +85,15 @@ def postprocess(domain, ns, every=.05, spacing=.01, **arguments):
     imp = ax.tricontour(x[:,0], x[:,1], bezier.tri, p, 16, cmap='gray', linestyles='solid')
     fig.colorbar(imp, cax=caxp)
 
+
 # If the script is executed (as opposed to imported), :func:`nutils.cli.run`
 # calls the main function with arguments provided from the command line. To
 # keep with the default arguments simply run :sh:`python3 drivencavity.py`.
 
 if __name__ == '__main__':
   cli.run(main)
+  fig.show()
+
 
 # Once a simulation is developed and tested, it is good practice to save a few
 # strategic return values for regression testing. The :mod:`nutils.testing`
