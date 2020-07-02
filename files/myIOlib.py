@@ -76,7 +76,7 @@ def generate_txt( filename):
     data = {}
     data['aquifer'] = []
     data['aquifer'].append({
-        'd_top': 2400,
+        'd_top': 2200,
         'labda': 0.031,
         'H': 140,
         'T_surface': 20,
@@ -88,7 +88,7 @@ def generate_txt( filename):
         'K': 4e-13,
         'Cp_f' : 4183,
         'Cp_s' : 910,
-        'labda_s' : 1.9,
+        'labda_s' : 4.2, #was 1.9
         'g' : 9.81
     })
     data['well'] = []

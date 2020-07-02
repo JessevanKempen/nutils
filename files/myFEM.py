@@ -316,7 +316,7 @@ def PumpTest(doublet):
 from myUQ import *
 
 ## Thermo-hydraulic Finite Element Model
-def DoubletFlow(aquifer, well, doublet, permeability, porosity):
+def DoubletFlow(aquifer, well, doublet, k, eps):
 
     nelems = 10
     degree = 3
@@ -369,14 +369,14 @@ def DoubletFlow(aquifer, well, doublet, permeability, porosity):
     ns.nyy = 0, 1
     ns.pout = doublet.P_aquifer
     ns.tin = doublet.well.Ti_inj #+273
-    ns.tout = doublet.T_HE #+273
+    ns.tout = doublet.T_HE #+273        #gebruik ik dit uberhaupt ergens?
 
     Pe = 1
     # kappa_int : 'intrinsic diffusivity' = nelems/(2*Pe)
     # ns.kappadiag = np.diag((kappa_int,kappa_int))
     # ns.kappa_ij = 'sqrt(u_k u_k) kappadiag_ij'
 
-    ns.qh = 1750 #[W/m^2] random number
+    ns.qh = (doublet.T_HE - doublet.well.Ti_inj)/(aquifer.H/aquifer.labda_s) #1750 #[W/m^2] random number
     lambdl = 0.663 #'thermal conductivity liquid [W/mK]'
     lambds = 1.9 #'thermal conductivity solid [W/mK]'
 
@@ -385,152 +385,152 @@ def DoubletFlow(aquifer, well, doublet, permeability, porosity):
     # ns.tout = ns.qdot / (ns.mdot*ns.cf) + ns.tin #temperature production well [K]
     # print(ns.tout.eval())
 
-    p_inlet = np.empty([N])
-    T_prod = np.empty([N])
-    print(p_inlet)
+    # p_inlet = np.empty([N])
+    # T_prod = np.empty([N])
+    # print(p_inlet)
 
-    for index, (k, eps) in enumerate(zip(permeability, porosity)):
-        k_int_x = k #'intrinsic permeability [m2]'
-        k_int_y = k #'intrinsic permeability [m2]'
-        k_int= (k_int_x,k_int_y)
-        ns.k = ((aquifer.rho_f*aquifer.g)/aquifer.mu)*np.diag(k_int)
-        ns.rho = aquifer.rho_f
-        ns.u_i = '-k_ij (p_,j + (rho g_1)_,j)'
-        # ns.u_i = '-k_ij p_,j + k_ij rho g_i x_,j'  # (u_k t)_,k
+    # for index, (k, eps) in enumerate(zip(permeability, porosity)):
+    k_int_x = k #'intrinsic permeability [m2]'
+    k_int_y = k #'intrinsic permeability [m2]'
+    k_int= (k_int_x,k_int_y)
+    ns.k = ((aquifer.rho_f*aquifer.g)/aquifer.mu)*np.diag(k_int)
+    ns.rho = aquifer.rho_f
+    ns.u_i = '-k_ij (p_,j + (rho g_1)_,j)'
+    # ns.u_i = '-k_ij p_,j + k_ij rho g_i x_,j'  # (u_k t)_,k
 
-        epsilon = eps #'porosity [%]'
-        ns.u0 = (ns.mdot / (aquifer.rho_f * ns.Awell)) * epsilon
-        ns.qf = ns.u0
-        ns.lambd = epsilon * lambdl + (1 - epsilon) * lambds  # heat conductivity [W/m/K]
+    epsilon = eps #'porosity [%]'
+    ns.u0 = (ns.mdot / (aquifer.rho_f * ns.Awell)) * epsilon
+    ns.qf = ns.u0
+    ns.lambd = epsilon * lambdl + (1 - epsilon) * lambds  # heat conductivity [W/m/K]
 
-        # Hydraulic process boundary conditions
-        sqr = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       #outflow condition p=p_out
-        # sqr += topo.boundary['top'].integral('(p - pbu) (p - pbu) d:x' @ ns, degree=degree * 2)       #upper bound condition p=p_bbu
-        # sqr += topo.boundary['bottom'].integral('(p - pbl) (p - pbl) d:x' @ ns, degree=degree * 2)       #lower bound condition p=p_pbl
-        # sqr = topo.boundary['right'].integral('(p)^2 d:x' @ ns, degree=degree * 2)       #outflow condition p=0
-        # sqr = topo.boundary['left'].integral('(u_i - u0_i) (u_i - u0_i) d:x' @ ns, degree=degree*2) #inflow condition u=u_0
-        # sqr += topo.boundary['top,bottom'].integral('(u_i n_i)^2 d:x' @ ns, degree=degree*2)      #symmetry top and bottom u.n = 0
-        cons = solver.optimize('lhs', sqr, droptol=1e-15)
+    # Hydraulic process boundary conditions
+    sqr = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       #outflow condition p=p_out
+    # sqr += topo.boundary['top'].integral('(p - pbu) (p - pbu) d:x' @ ns, degree=degree * 2)       #upper bound condition p=p_bbu
+    # sqr += topo.boundary['bottom'].integral('(p - pbl) (p - pbl) d:x' @ ns, degree=degree * 2)       #lower bound condition p=p_pbl
+    # sqr = topo.boundary['right'].integral('(p)^2 d:x' @ ns, degree=degree * 2)       #outflow condition p=0
+    # sqr = topo.boundary['left'].integral('(u_i - u0_i) (u_i - u0_i) d:x' @ ns, degree=degree*2) #inflow condition u=u_0
+    # sqr += topo.boundary['top,bottom'].integral('(u_i n_i)^2 d:x' @ ns, degree=degree*2)      #symmetry top and bottom u.n = 0
+    cons = solver.optimize('lhs', sqr, droptol=1e-15)
 
-        # Hydraulic process mixed formulation
-        # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
-        # res += topo.integral('ubasis_ni rho g_i' @ ns, degree=2)               #hydraulic gradient
-        # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
-        # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
-        # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
+    # Hydraulic process mixed formulation
+    # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
+    # res += topo.integral('ubasis_ni rho g_i' @ ns, degree=2)               #hydraulic gradient
+    # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
+    # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
+    # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
 
-        # res += topo.integral('pbasis_n,i rho g_i' @ ns, degree=2)               #hydraulic gradient
+    # res += topo.integral('pbasis_n,i rho g_i' @ ns, degree=2)               #hydraulic gradient
 
-        # Hydraulic process single field formulation
-        res = topo.integral('(k_ij p_,j pbasis_n,i) d:x' @ ns, degree=degree*2) #darcy velocity
-        res -= topo.boundary['left'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) #source flux boundary
-        res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
+    # Hydraulic process single field formulation
+    res = topo.integral('(k_ij p_,j pbasis_n,i) d:x' @ ns, degree=degree*2) #darcy velocity
+    res -= topo.boundary['left'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) #source flux boundary
+    res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
 
-        # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
-        # res += topo.integral('ubasis_ni rho g_i' @ ns, degree=2)               #hydraulic gradient
-        # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
-        # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
-        # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
+    # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
+    # res += topo.integral('ubasis_ni rho g_i' @ ns, degree=2)               #hydraulic gradient
+    # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
+    # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
+    # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
 
-        lhs0 = solver.solve_linear('lhs', res, constrain=cons)
-
-
-        # Heat transport process
-        sqrT = topo.boundary['left'].integral('(t - tin) (t - tin) d:x' @ ns, degree=degree*2)      #temperature injection pipe
-        # sqrT += topo.integral('(t - 50) (t - 50) d:x' @ ns, degree=degree*2)  #initial temperature in domain
-        # sqrT = topo.boundary['right'].integral('(t - tout) (t - tout) d:x' @ ns, degree=degree*2)  #temperature production pipe
-        # sqrT += topo.boundary['top,bottom'].integral('(t_,i n_i)^2 d:x' @ ns, degree=degree*2)      #symmetry top and bottom t_,i.n = 0
-        # sqrT += topo.boundary['bottom'].integral('(t_,i n_i - tc) (t_,i n_i - tc) d:x' @ ns, degree=degree*2) #heat flux bottom
-        const = solver.optimize('lhst', sqrT, droptol=1e-15)
-
-        rest = topo.integral('(rho cf tbasis_n (u_k t)_,k ) d:x' @ ns, degree=degree*2) #convection of energy
-        rest -= topo.boundary['top,bottom'].integral('tbasis_n qh d:x' @ ns, degree=degree*2) #heat flux boundary
-        rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree * 2)  # heat flux boundary
-        rest -= topo.integral('tbasis_n,i (- lambd) t_,i d:x' @ ns, degree=degree*2) #conductive heat flux
-
-        rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree*2)  #heat source/sink term
-
-        lhsT = solver.newton('lhst', rest, constrain=const, arguments=dict(lhs=lhs0)).solve(tol=1e-2)
+    lhs0 = solver.solve_linear('lhs', res, constrain=cons)
 
 
-        #################
-        # Postprocessing
-        #################
+    # Heat transport process
+    sqrT = topo.boundary['left'].integral('(t - tin) (t - tin) d:x' @ ns, degree=degree*2)      #temperature injection pipe
+    # sqrT += topo.integral('(t - 50) (t - 50) d:x' @ ns, degree=degree*2)  #initial temperature in domain
+    # sqrT = topo.boundary['right'].integral('(t - tout) (t - tout) d:x' @ ns, degree=degree*2)  #temperature production pipe
+    # sqrT += topo.boundary['top,bottom'].integral('(t_,i n_i)^2 d:x' @ ns, degree=degree*2)      #symmetry top and bottom t_,i.n = 0
+    # sqrT += topo.boundary['bottom'].integral('(t_,i n_i - tc) (t_,i n_i - tc) d:x' @ ns, degree=degree*2) #heat flux bottom
+    const = solver.optimize('lhst', sqrT, droptol=1e-15)
 
-        bezier = topo.sample('bezier', 9)
-        # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhs=lhs0)
-        x, p, u, t = bezier.eval(['x_i', 'p', 'u_i', 't'] @ ns, lhs=lhs0,lhst=lhsT)
+    rest = topo.integral('(rho cf tbasis_n (u_k t)_,k ) d:x' @ ns, degree=degree*2) #convection of energy
+    rest -= topo.boundary['top,bottom'].integral('tbasis_n qh d:x' @ ns, degree=degree*2) #heat flux boundary
+    rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree * 2)  # heat flux boundary
+    rest -= topo.integral('tbasis_n,i (- lambd) t_,i d:x' @ ns, degree=degree*2) #conductive heat flux
 
-        # fig, axs = plt.subplots(3, sharex=True, sharey=True)
-        # fig.suptitle('2D Aquifer')
-        #
-        # plot0 = axs[0].tripcolor(x[:,0], x[:,1], bezier.tri, p/1e5, shading='gouraud', rasterized=True)
-        # fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
-        #
-        # plot1 = axs[1].tripcolor(x[:,0], x[:,1], bezier.tri, u[:,0], vmin=0, vmax=0.05, shading='gouraud', rasterized=True)
-        # fig.colorbar(plot1, ax=axs[1], label="Darcy Ux [m/s]")
-        # plt.xlabel('x')
-        # plt.ylabel('z')
-        #
-        # plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, t, shading='gouraud', rasterized=True)
-        # fig.colorbar(plot2, ax=axs[2], label="T [C]")
-        # # print(index)
-        bar = 1e5
-        p_inlet[index] = p[0]/bar
-        # print(p_inlet)
-        # print("temperature", t)
-        T_prod[index] = t[-1]
+    rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree*2)  #heat source/sink term
+
+    lhsT = solver.newton('lhst', rest, constrain=const, arguments=dict(lhs=lhs0)).solve(tol=1e-2)
+
+
+    #################
+    # Postprocessing
+    #################
+
+    bezier = topo.sample('bezier', 9)
+    # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhs=lhs0)
+    x, p, u, t = bezier.eval(['x_i', 'p', 'u_i', 't'] @ ns, lhs=lhs0,lhst=lhsT)
+
+    # fig, axs = plt.subplots(3, sharex=True, sharey=True)
+    # fig.suptitle('2D Aquifer')
+    #
+    # plot0 = axs[0].tripcolor(x[:,0], x[:,1], bezier.tri, p/1e5, shading='gouraud', rasterized=True)
+    # fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
+    #
+    # plot1 = axs[1].tripcolor(x[:,0], x[:,1], bezier.tri, u[:,0], vmin=0, vmax=0.05, shading='gouraud', rasterized=True)
+    # fig.colorbar(plot1, ax=axs[1], label="Darcy Ux [m/s]")
+    # plt.xlabel('x')
+    # plt.ylabel('z')
+    #
+    # plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, t, shading='gouraud', rasterized=True)
+    # fig.colorbar(plot2, ax=axs[2], label="T [C]")
+    # # print(index)
+    bar = 1e5
+    p_inlet = p[0]/bar
+    # # print(p_inlet)
+    # # print("temperature", t)
+    T_prod = t[-1]
 
     # plt.show()
 
-    fig, ax = plt.subplots(4)
-    density = 'True'
-
-    ax[0].plot(x1,frozen_lognorm.pdf(x1)*(max(x1)-min(x1)))
-    # ax[0].hist(permeability, bins=bin_centers1, density=density, histtype='stepfilled', alpha=0.2)
-    ax[0].set(xlabel='Permeability K [m/s]', ylabel='Probability')
-    ax[0].axvline(x=2.2730989084434785e-08)
-
-    ax[1].plot(x2, frozen_norm_por.pdf(x2)*(max(x2)-min(x2)))
-    # ax[1].hist(porosity, bins=bin_centers2, density=density, histtype='stepfilled', alpha=0.2)
-    ax[1].set(xlabel='Porosity [-]', ylabel='Probability')
-    ax[1].axvline(x=0.163)
-
-    ax[2].hist(p_inlet, density=density, bins=50, histtype='stepfilled', alpha=0.2)
-    mu_p = np.mean(p_inlet)
-    print(mu_p)
-    stddv_p = np.var(p_inlet)**0.5
-    print(stddv_p)
-    frozen_norm_p = stats.norm(loc=mu_p, scale=stddv_p)
-    x3 = np.linspace(mu_p-3*stddv_p, mu_p+3*stddv_p, 10)
-    print(frozen_norm_p.pdf(x3))
-    # ax[2].plot(x3,frozen_lognorm_p.pdf(x3))
-    ax[2].plot(x3,frozen_norm_p.pdf(x3))
-    # ax[2].xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax[2].get_xaxis().get_major_formatter().set_useOffset(False)
-    ax[2].set(xlabel='Injector Pressure [Bar]', ylabel='Probability')
-    # plt.xlabel('Inlet Pressure [Bar]')
-    # plt.ylabel('Probability')
-
-    ax[3].hist(T_prod, density=density, bins=50, histtype='stepfilled', alpha=0.2)
-    mu_T = np.mean(T_prod)
-    stddv_T = np.var(T_prod)**0.5
-    frozen_norm_T = stats.norm(loc=mu_T, scale=stddv_T)
-    x4 = np.linspace(mu_T-3*stddv_T, mu_T+3*stddv_T, 10)
-    # print(frozen_norm_p.pdf(x4))
-    ax[3].plot(x4,frozen_norm_T.pdf(x4))
-    ax[3].set(xlabel='Producer Temperature [Celcius]', ylabel='Probability')
-
-    # print(ns.u0.eval())
-    print("velocity horizontal", (u[:,0]))
-    # print((p[0]))
-    plt.subplots_adjust(hspace=1)
-    # plt.show()
-
-    Confidence_mu = 0.95
-    N_min = (norm.ppf((1 + Confidence_mu)/2) / (1 - Confidence_mu))**2 * (stddv_p / mu_p)**2
-    print("Cdf", norm.ppf((1 + Confidence_mu)/2))
-    print("N_min", N_min)
+    # fig, ax = plt.subplots(4)
+    # density = 'True'
+    #
+    # ax[0].plot(x1,frozen_lognorm.pdf(x1)*(max(x1)-min(x1)))
+    # # ax[0].hist(permeability, bins=bin_centers1, density=density, histtype='stepfilled', alpha=0.2)
+    # ax[0].set(xlabel='Permeability K [m/s]', ylabel='Probability')
+    # ax[0].axvline(x=2.2730989084434785e-08)
+    #
+    # ax[1].plot(x2, frozen_norm_por.pdf(x2)*(max(x2)-min(x2)))
+    # # ax[1].hist(porosity, bins=bin_centers2, density=density, histtype='stepfilled', alpha=0.2)
+    # ax[1].set(xlabel='Porosity [-]', ylabel='Probability')
+    # ax[1].axvline(x=0.163)
+    #
+    # ax[2].hist(p_inlet, density=density, bins=50, histtype='stepfilled', alpha=0.2)
+    # mu_p = np.mean(p_inlet)
+    # # print(mu_p)
+    # stddv_p = np.var(p_inlet)**0.5
+    # # print(stddv_p)
+    # frozen_norm_p = stats.norm(loc=mu_p, scale=stddv_p)
+    # x3 = np.linspace(mu_p-3*stddv_p, mu_p+3*stddv_p, 10)
+    # # print(frozen_norm_p.pdf(x3))
+    # # ax[2].plot(x3,frozen_lognorm_p.pdf(x3))
+    # ax[2].plot(x3,frozen_norm_p.pdf(x3))
+    # # ax[2].xaxis.set_major_locator(MaxNLocator(integer=True))
+    # ax[2].get_xaxis().get_major_formatter().set_useOffset(False)
+    # ax[2].set(xlabel='Injector Pressure [Bar]', ylabel='Probability')
+    # # plt.xlabel('Inlet Pressure [Bar]')
+    # # plt.ylabel('Probability')
+    #
+    # ax[3].hist(T_prod, density=density, bins=50, histtype='stepfilled', alpha=0.2)
+    # mu_T = np.mean(T_prod)
+    # stddv_T = np.var(T_prod)**0.5
+    # frozen_norm_T = stats.norm(loc=mu_T, scale=stddv_T)
+    # x4 = np.linspace(mu_T-3*stddv_T, mu_T+3*stddv_T, 10)
+    # # print(frozen_norm_p.pdf(x4))
+    # ax[3].plot(x4,frozen_norm_T.pdf(x4))
+    # ax[3].set(xlabel='Producer Temperature [Celcius]', ylabel='Probability')
+    #
+    # # print(ns.u0.eval())
+    # # print("velocity horizontal", (u[:,0]))
+    # # print((p[0]))
+    # plt.subplots_adjust(hspace=1)
+    # # plt.show()
+    #
+    # Confidence_mu = 0.95
+    # N_min = (norm.ppf((1 + Confidence_mu)/2) / (1 - Confidence_mu))**2 * (stddv_p / mu_p)**2
+    # print("Cdf", norm.ppf((1 + Confidence_mu)/2))
+    # print("N_min", N_min)
 
     # fig1, ax1 = plt.subplots(2)
 

@@ -1,5 +1,7 @@
 import math
 
+#permeability milidarcy to hydraulic conductivity m/s
+
 mD = 9.869233e-13/1000
 k = 1*mD
 rho = 1080

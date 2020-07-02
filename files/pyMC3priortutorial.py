@@ -114,17 +114,19 @@ for _ in range(10):
         alpha = from_posterior('alpha', trace['alpha'])
         beta0 = from_posterior('beta0', trace['beta0'])
         beta1 = from_posterior('beta1', trace['beta1'])
-
+        posterior_sample = pm.sample(size, tune=2000, chains=4, cores=1)
+        # print("info var", beta0, beta1)
         # Expected value of outcome
         mu = alpha + beta0 * X1 + beta1 * X2
-
+        print("info var", mu)
         # Likelihood (sampling distribution) of observations
         Y_obs = pm.Normal('Y_obs', mu=mu, sd=1, observed=Y)
-
+        print("info var", Y_obs)
         # draw 10000 posterior samples
         trace = pm.sample(1000, cores=1, chains=4)
         traces.append(trace)
 
+plt.show()
 
 print('Posterior distributions after ' + str(len(traces)) + ' iterations.')
 cmap = mpl.cm.autumn

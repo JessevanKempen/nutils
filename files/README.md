@@ -1,4 +1,4 @@
-Graduation project: Quantifying uncertainty in the subsurface of geothermal systems  {#mainpage}
+Graduation project: Quantifying uncertainty in the subsurface of geothermal systems
 ============================
 
 This repository contains a geothermal doublet model to be used for uncertainty quantification based on real-world data
