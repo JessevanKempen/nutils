@@ -42,7 +42,6 @@ class Well:
                 self.D_in = 2 * self.r
                 self.mdot = self.Q * aquifer['rho_f']
                 self.A_well = np.pi * 2 * self.r
-                print("mdot is ", self.mdot)
 
 ## Assemble doublet system
 class DoubletGenerator:
@@ -318,38 +317,26 @@ from myUQ import *
 ## Thermo-hydraulic Finite Element Model
 def DoubletFlow(aquifer, well, doublet, k, eps):
 
-    nelems = 10
-    degree = 3
-
-    H = round(aquifer.H/1.5) #2 #'thickness aquifer'
-    L = round(well.L/1.5) #10 #'length aquifer'
-
-    nelemsX = 20#round(L/100)
-    nelemsY = 5#round(H/100)
-
-    VertsX = np.linspace(0.0, L, nelemsX + 1)
-    VertsY = np.linspace(0.0, H, nelemsY + 1)
-
-    topo, geom = mesh.rectilinear([VertsX, VertsY])
-    # topo, geom = mesh.unitsquare(nelems, 'triangle')
+    # construct mesh
+    nelemsX = 20
+    nelemsY = 5
+    vertsX = np.linspace(0, well.L, nelemsX + 1)
+    vertsY = np.linspace(0, aquifer.H, nelemsY + 1)
+    dx = well.L/(nelemsX + 1)
+    dy = aquifer.H/(nelemsY + 1)
+    topo, geom = mesh.rectilinear([vertsX, vertsY])
     topo = topo.withboundary(inner='left', outer='right')
 
-
+    # create namespace
     ns = function.Namespace()
-    ns.x = geom
-
-    # ns.ubasis, ns.pbasis = function.chain([
-    #     topo.basis('std', degree=degree).vector(2),
-    #     topo.basis('std', degree=degree - 1)
-    # ])
+    degree = 3
     ns.pbasis = topo.basis('std', degree=degree)
     ns.tbasis = topo.basis('std', degree=degree - 1)
-
-    # ns.u_i = 'ubasis_ni ?lhs_n'
     ns.p = 'pbasis_n ?lhs_n'
     ns.t = 'tbasis_n ?lhst_n'
+    ns.x = geom
 
-    ns.rho = aquifer.rho_f
+    ns.ρ = 996.9 * (1 - 3.17e-4 * (ns.t - 298.15) - 2.56e-6 * (ns.t - 298.15)**2 )
     ns.cf = aquifer.Cp_f#4183
 
     # k_int_x : 'intrinsic permeability [m2]' = 200e-12
@@ -360,7 +347,6 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
 
     ns.g = aquifer.g
     ns.g_i = '<0, -g>_i'
-    # ns.g_i = 0, -aquifer.g
     ns.qf = 0
     ns.uinf = 1, 0
     ns.mdot = well.mdot # massflow [kg/s]
@@ -370,13 +356,12 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     ns.pout = doublet.P_aquifer
     ns.tin = doublet.well.Ti_inj #+273
     ns.tout = doublet.T_HE #+273        #gebruik ik dit uberhaupt ergens?
+    # ns.t_0 = 90
 
     Pe = 1
-    # kappa_int : 'intrinsic diffusivity' = nelems/(2*Pe)
-    # ns.kappadiag = np.diag((kappa_int,kappa_int))
-    # ns.kappa_ij = 'sqrt(u_k u_k) kappadiag_ij'
 
-    ns.qh = (doublet.T_HE - doublet.well.Ti_inj)/(aquifer.H/aquifer.labda_s) #1750 #[W/m^2] random number
+    ns.qh = (aquifer.labda_s * dy * aquifer.H) * (doublet.well.Ti_inj - ns.t)/dx #1750 #[W/m^2] random number #ns.t = doublet.T_HE
+
     lambdl = 0.663 #'thermal conductivity liquid [W/mK]'
     lambds = 1.9 #'thermal conductivity solid [W/mK]'
 
@@ -394,8 +379,8 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     k_int_y = k #'intrinsic permeability [m2]'
     k_int= (k_int_x,k_int_y)
     ns.k = ((aquifer.rho_f*aquifer.g)/aquifer.mu)*np.diag(k_int)
-    ns.rho = aquifer.rho_f
-    ns.u_i = '-k_ij (p_,j + (rho g_1)_,j)'
+    ns.ρ = aquifer.rho_f
+    ns.u_i = '-k_ij (p_,j + (ρ g_1)_,j)' #darcy velocity in terms of pressure and gravity
     # ns.u_i = '-k_ij p_,j + k_ij rho g_i x_,j'  # (u_k t)_,k
 
     epsilon = eps #'porosity [%]'
@@ -403,7 +388,14 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     ns.qf = ns.u0
     ns.lambd = epsilon * lambdl + (1 - epsilon) * lambds  # heat conductivity [W/m/K]
 
-    # Hydraulic process boundary conditions
+    # define initial conditions thermal part
+    # numpy.random.seed(seed)
+    # sqr = domain.integral('(t - t_0) (t - t_0)' @ ns, degree=degree * 2)
+    # tdofs0 = solver.optimize('t', sqr) * numpy.random.normal(1, .1, len(
+    #     ns.ubasis))  # set initial condition to t=t_0 with small random noise
+    # state0 = dict(t=tdofs0)
+
+    # define dirichlet constraints for hydraulic part
     sqr = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       #outflow condition p=p_out
     # sqr += topo.boundary['top'].integral('(p - pbu) (p - pbu) d:x' @ ns, degree=degree * 2)       #upper bound condition p=p_bbu
     # sqr += topo.boundary['bottom'].integral('(p - pbl) (p - pbl) d:x' @ ns, degree=degree * 2)       #lower bound condition p=p_pbl
@@ -414,12 +406,12 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
 
     # Hydraulic process mixed formulation
     # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
-    # res += topo.integral('ubasis_ni rho g_i' @ ns, degree=2)               #hydraulic gradient
+    # res += topo.integral('ubasis_ni ρ g_i' @ ns, degree=2)               #hydraulic gradient
     # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
     # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
     # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
 
-    # res += topo.integral('pbasis_n,i rho g_i' @ ns, degree=2)               #hydraulic gradient
+    # res += topo.integral('pbasis_n,i ρ g_i' @ ns, degree=2)               #hydraulic gradient
 
     # Hydraulic process single field formulation
     res = topo.integral('(k_ij p_,j pbasis_n,i) d:x' @ ns, degree=degree*2) #darcy velocity
@@ -427,15 +419,32 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
 
     # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
-    # res += topo.integral('ubasis_ni rho g_i' @ ns, degree=2)               #hydraulic gradient
+    # res += topo.integral('ubasis_ni ρ g_i' @ ns, degree=2)               #hydraulic gradient
     # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
     # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
     # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
 
     lhs0 = solver.solve_linear('lhs', res, constrain=cons)
 
+    # with treelog.iter.plain('timestep', solver.impliciteuler(('u', 'p'), residual=(ures, pres), inertia=(uinertia, None),
+    #                                              arguments=state0, timestep=timestep, constrain=cons,
+    #                                              newtontol=1e-10)) as steps:
+    #     for istep, state in enumerate(steps):
+    #
+    #         t = istep * timestep
+    #         # x, p, u, t = bezier.eval(['x_i', 'p', 'u_i', 't'] @ ns, lhs=lhs0, lhst=lhsT)
+    #         x, u, normu, p = bezier.eval(['x_i', 'u_i', 'sqrt(u_k u_k)', 'p'] @ ns, **state)
+    #         ugrd = interpolate[xgrd](u)
+    #
+    #         if t >= endtime:
+    #             break
+    #
+    #         xgrd = util.regularize(bbox, spacing, xgrd + ugrd * timestep)
+    #
+    # return state0, state
 
     # Heat transport process
+
     sqrT = topo.boundary['left'].integral('(t - tin) (t - tin) d:x' @ ns, degree=degree*2)      #temperature injection pipe
     # sqrT += topo.integral('(t - 50) (t - 50) d:x' @ ns, degree=degree*2)  #initial temperature in domain
     # sqrT = topo.boundary['right'].integral('(t - tout) (t - tout) d:x' @ ns, degree=degree*2)  #temperature production pipe
@@ -443,7 +452,7 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     # sqrT += topo.boundary['bottom'].integral('(t_,i n_i - tc) (t_,i n_i - tc) d:x' @ ns, degree=degree*2) #heat flux bottom
     const = solver.optimize('lhst', sqrT, droptol=1e-15)
 
-    rest = topo.integral('(rho cf tbasis_n (u_k t)_,k ) d:x' @ ns, degree=degree*2) #convection of energy
+    rest = topo.integral('(ρ cf tbasis_n (u_k t)_,k ) d:x' @ ns, degree=degree*2) #convection of energy
     rest -= topo.boundary['top,bottom'].integral('tbasis_n qh d:x' @ ns, degree=degree*2) #heat flux boundary
     rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree * 2)  # heat flux boundary
     rest -= topo.integral('tbasis_n,i (- lambd) t_,i d:x' @ ns, degree=degree*2) #conductive heat flux
@@ -461,19 +470,19 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhs=lhs0)
     x, p, u, t = bezier.eval(['x_i', 'p', 'u_i', 't'] @ ns, lhs=lhs0,lhst=lhsT)
 
-    # fig, axs = plt.subplots(3, sharex=True, sharey=True)
-    # fig.suptitle('2D Aquifer')
-    #
-    # plot0 = axs[0].tripcolor(x[:,0], x[:,1], bezier.tri, p/1e5, shading='gouraud', rasterized=True)
-    # fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
-    #
-    # plot1 = axs[1].tripcolor(x[:,0], x[:,1], bezier.tri, u[:,0], vmin=0, vmax=0.05, shading='gouraud', rasterized=True)
-    # fig.colorbar(plot1, ax=axs[1], label="Darcy Ux [m/s]")
-    # plt.xlabel('x')
-    # plt.ylabel('z')
-    #
-    # plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, t, shading='gouraud', rasterized=True)
-    # fig.colorbar(plot2, ax=axs[2], label="T [C]")
+    fig, axs = plt.subplots(3, sharex=True, sharey=True)
+    fig.suptitle('2D Aquifer')
+
+    plot0 = axs[0].tripcolor(x[:,0], x[:,1], bezier.tri, p/1e5, shading='gouraud', rasterized=True)
+    fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
+
+    plot1 = axs[1].tripcolor(x[:,0], x[:,1], bezier.tri, u[:,0], vmin=0, vmax=0.05, shading='gouraud', rasterized=True)
+    fig.colorbar(plot1, ax=axs[1], label="Darcy Ux [m/s]")
+    plt.xlabel('x')
+    plt.ylabel('z')
+
+    plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, t, shading='gouraud', rasterized=True)
+    fig.colorbar(plot2, ax=axs[2], label="T [C]")
     # # print(index)
     bar = 1e5
     p_inlet = p[0]/bar
@@ -481,7 +490,7 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     # # print("temperature", t)
     T_prod = t[-1]
 
-    # plt.show()
+    plt.show()
 
     # fig, ax = plt.subplots(4)
     # density = 'True'

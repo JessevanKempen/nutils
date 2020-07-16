@@ -7,7 +7,7 @@ import math
 import pandas as pd
 # import seaborn as sns
 from myUQ import *
-
+from matplotlib import pyplot as plt
 
 ## Parameters txt file reader
 def read_from_txt ( filename ):
@@ -16,58 +16,7 @@ def read_from_txt ( filename ):
     with open(filename, 'r') as json_file:
             data = json.load(json_file)
 
-    # for key, value in data['aquifer'][0].items():
-        # print(key, ":", value)
-
-    # for key, value in data['well'][0].items():
-        # print(key, ":", value)
-
     return data['aquifer'][0], data['well'][0]
-
-        # for key, value in aquifer.items():
-        #     self.parameter = value
-        #     print("parameter", self.parameter)
-            # print(key, ":", value)
-
-        # aquifer characteristics
-        # self.key = value
-        # print("testtest", self.key)
-
-    # for x in data['aquifer']:
-    #     print("x",x[1])
-        # print("%s: %d" % (x, x[x]))
-    # print(well)
-
-    # for aq in data['aquifer']:
-    #     d_top = aq['d_top']  # depth top aquifer at production well
-    #     labda = aq['labda']  # geothermal gradient
-    #     reservoir.H = aq['H']  # thickness aquifer
-    #     T_surface = aq['T_surface']
-    #     porosity = aq['porosity']
-    #     rho_f = aq['rho_f']
-    #     mhu = aq['mhu']
-    #     K = aq['K']
-    #     print(H)
-
-            #Open the parameter file to read
-    # open( parameters.txt, "r")
-    # open( "fname", "r" )
-    # open("fname.txt", "r")
-
-    # with open('parameters.txt') as json_file:
-    #     data = json.load(json_file)
-    #     for aq in data['aquifer']:
-    #         self.d_top = aq['d_top']  # depth top aquifer at production well
-    #         self.labda = aq['labda']  # geothermal gradient
-    #         self.H = aq['H']  # thickness aquifer
-    #         self.T_surface = aq['T_surface']
-    #         self.porosity = aq['porosity']
-    #         self.rho_f = aq['rho_f']
-    #         self.mhu = aq['mhu']
-    #         self.K = aq['K']
-
-from matplotlib import pyplot as plt
-
 
 ## Generates a Parameters txt file
 def generate_txt( filename):
@@ -82,12 +31,12 @@ def generate_txt( filename):
         'T_surface': 20,
         'porosity': 0.05,
         'permeability': 9e-10,
-        'rho_f': 1080,
-        'rho_s': 2711,
+        'rho_f': 996.9,
+        'rho_s': 2400, #2711
         'viscosity': 8.9e-4,
         'K': 4e-13,
         'Cp_f' : 4183,
-        'Cp_s' : 910,
+        'Cp_s' : 870, #910
         'labda_s' : 4.2, #was 1.9
         'g' : 9.81
     })

@@ -8,7 +8,7 @@ import pandas as pd
 
 # from myMain import *
 
-N = 50
+N = 5
 
 fig, ax = plt.subplots(2)
 
