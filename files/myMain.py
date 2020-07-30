@@ -32,7 +32,7 @@ generate_txt( "parameters.txt" )
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
 
-# Construct the finite element model
+# Construct the objects of for the model
 print("Constructing the FE model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
@@ -41,6 +41,11 @@ doublet = DoubletGenerator(aquifer, well)
 # Run Analytical Model
 print("Running Analytical Analysis...")
 PumpTest(doublet)
+
+# Set stoichastic parameters
+print("Setting stoichastic parameters...")
+porosity = get_samples_porosity(N)
+permeability = get_samples_permeability(porosity, N)
 
 if not performInference:
     # Run Finite Element Model (Forward)
@@ -64,7 +69,6 @@ if not performInference:
     print("p_inlet mean", mu_p, "p_inlet sd", stddv_p)
 else:
     # Run Bayesian Inference
-
     import pymc3 as pm
     from pymc3.distributions import Interpolated
     print('Running on PyMC3 v{}'.format(pm.__version__))
@@ -117,8 +121,8 @@ else:
         T_model = np.empty([N])
         bar = 1e5
 
-        for index, (k, eps) in enumerate(zip(permeability.random(size=N), porosity_samples)):
-            p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, eps)
+        for index, (k, epsilon) in enumerate(zip(permeability.random(size=N), porosity_samples)):
+            p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon)
 
             p_model[index] = p_inlet
             T_model[index] = T_prod

@@ -1,5 +1,4 @@
-from nutils import mesh, function, solver, export, cli, testing
-
+from nutils import mesh, function, solver, util, export, cli, testing
 import numpy as np, treelog
 from matplotlib import pyplot as plt
 from scipy.stats import norm
@@ -7,11 +6,9 @@ import pandas as pd
 # import seaborn as sns
 import matplotlib.pyplot as plt
 import math
-from matplotlib.ticker import MaxNLocator
 
-# from myUQ import *
+## Deterministic thermo-hydraulic model
 
-## Thermo-hydraulic Analytical Model
 class Aquifer:
 
     def __init__(self, aquifer):
@@ -28,6 +25,7 @@ class Aquifer:
         self.Cp_f = aquifer['Cp_f'] # water heat capacity
         self.Cp_s = aquifer['Cp_s'] #heat capacity limestone [J/kg K]
         self.labda_s = aquifer['labda_s'] # thermal conductivity solid [W/mK]
+        self.labda_l = aquifer['labda_l'] # thermal conductivity solid [W/mK]
         self.g = 9.81 # gravity constant
 
 class Well:
@@ -43,7 +41,6 @@ class Well:
                 self.mdot = self.Q * aquifer['rho_f']
                 self.A_well = np.pi * 2 * self.r
 
-## Assemble doublet system
 class DoubletGenerator:
     """Generates all properties for a doublet
 
@@ -91,9 +88,6 @@ class DoubletGenerator:
 
         self.P_grid = self._compute_P_grid()
         self.T_grid = self._compute_T_grid()
-
-        # print(self._get_P(900)/1e5)
-        # print(self._get_P(1100)/1e5)
 
     # def _get_gaussian_points
     def _compute_T_grid(self):
@@ -249,57 +243,13 @@ class DoubletGenerator:
         # y = np.linspace(0,- (self.aquifer.d_top + self.aquifer.H) , (20 * self.Ny) - 1)
         x_well = np.array([[self.x_grid[0][math.floor(self.Nx/3)]], [self.x_grid[0][2*math.floor(self.Nx/3)]]])
         y_well = self.y_grid[math.floor(self.Ny/2)][0] * np.ones(2)
-        # print(self.y_grid)
-        # print(y_well)
-
-        # x_well, y_well = np.meshgrid(x, y)
-        # print(x_well)
-        # print(y_well)
 
         return x_well, y_well
 
-class Node:
-    """Represent node.
-
-    Args:
-        ID_x float: ID of x position of the node.
-        ID_y float: ID of y position of the node.
-
-    """
-    def __init__(self, ID_x, ID_y, domain):
-
-        self.ID_x = ID_x
-        self.ID_y = ID_y
-        self.pos = [self._get_x_coordinate(self.ID_x, domain), self._get_y_coordinate(self.ID_y, domain)]
-
-    def _get_x_coordinate(self, ID_x, domain):
-        """ Calculates x coordinate of node.
-
-        Arguments:
-            ID_x (int): x index of node
-        Returns:
-            x (float): Scalar of x coordinate of node center
-        """
-        x = domain[0] * ID_x
-        return x
-
-    def _get_y_coordinate(self, ID_y, domain):
-        """ Calculates y coordinate of node.
-
-        Arguments:
-            ID_y (int): y index of node
-        Returns:
-            y (float): Scalar of x coordinate of node center
-        """
-        y = domain[1] * ID_y
-        return y
-
-### main script ###
+### Run deterministic script
 def PumpTest(doublet):
-    # t0 = 0.01
-    # tEnd = 10
-
     print("\r\n############## Analytical values model ##############\n"
+          "m_dot:           ", round(doublet.mdot), "Kg/s\n"
           "P_aq,i/P_aq,p:   ", round(doublet.P_aquifer/1e5,2), "Bar\n"
           "P_bh,i/P_bh,p:   ", round(doublet.P_wellbore/1e5,2), "Bar\n"
           "T_bh,p:          ", doublet.T_wellbore, "Celcius\n"
@@ -311,164 +261,116 @@ def PumpTest(doublet):
           "T_in,i/T_out,HE: ", doublet.well.Ti_inj, "Celcius\n"
           "Power,HE:        ", round(doublet.Power_HE/1e6,2), "MW")
 
+## Finite element thermo-hydraulic model
 
-from myUQ import *
-
-## Thermo-hydraulic Finite Element Model
-def DoubletFlow(aquifer, well, doublet, k, eps):
+def DoubletFlow(aquifer, well, doublet, k, epsilon):
 
     # construct mesh
-    nelemsX = 20
+    nelemsX = 10
     nelemsY = 5
     vertsX = np.linspace(0, well.L, nelemsX + 1)
     vertsY = np.linspace(0, aquifer.H, nelemsY + 1)
-    dx = well.L/(nelemsX + 1)
-    dy = aquifer.H/(nelemsY + 1)
     topo, geom = mesh.rectilinear([vertsX, vertsY])
-    topo = topo.withboundary(inner='left', outer='right')
+    # topo = topo.withboundary(inner='left', outer='right')
 
     # create namespace
     ns = function.Namespace()
     degree = 3
     ns.pbasis = topo.basis('std', degree=degree)
-    ns.tbasis = topo.basis('std', degree=degree - 1)
-    ns.p = 'pbasis_n ?lhs_n'
-    ns.t = 'tbasis_n ?lhst_n'
+    ns.Tbasis = topo.basis('std', degree=degree - 1)
+    ns.p = 'pbasis_n ?lhsp_n'
+    ns.T = 'Tbasis_n ?lhsT_n'
     ns.x = geom
-
-    ns.ρ = 996.9 * (1 - 3.17e-4 * (ns.t - 298.15) - 2.56e-6 * (ns.t - 298.15)**2 )
-    ns.cf = aquifer.Cp_f#4183
-
-    # k_int_x : 'intrinsic permeability [m2]' = 200e-12
-    # k_int_y : 'intrinsic permeability [m2]' = 50e-12
-    # k_int= (k_int_x,k_int_y)
-    # ns.k = (1/ns.mhu)*np.diag(k_int)
-    # ns.q_i = '-k_ij p1_,j'
-
+    ns.cf = aquifer.Cp_f
     ns.g = aquifer.g
     ns.g_i = '<0, -g>_i'
-    ns.qf = 0
     ns.uinf = 1, 0
-    ns.mdot = well.mdot # massflow [kg/s]
-    ns.r = well.r # radius well [m]
+    ns.mdot = well.mdot
+    ns.r = well.r
     ns.Awell = well.A_well
     ns.nyy = 0, 1
     ns.pout = doublet.P_aquifer
-    ns.tin = doublet.well.Ti_inj #+273
-    ns.tout = doublet.T_HE #+273        #gebruik ik dit uberhaupt ergens?
-    # ns.t_0 = 90
-
-    Pe = 1
-
-    ns.qh = (aquifer.labda_s * dy * aquifer.H) * (doublet.well.Ti_inj - ns.t)/dx #1750 #[W/m^2] random number #ns.t = doublet.T_HE
-
-    lambdl = 0.663 #'thermal conductivity liquid [W/mK]'
-    lambds = 1.9 #'thermal conductivity solid [W/mK]'
-
-    # ns.qdot = ns.mdot*ns.cf*(ns.tout - ns.tin)
-    # ns.qdot = 5019600 #heat transfer rate heat exchanger[W/m^2]
-    # ns.tout = ns.qdot / (ns.mdot*ns.cf) + ns.tin #temperature production well [K]
-    # print(ns.tout.eval())
-
-    # p_inlet = np.empty([N])
-    # T_prod = np.empty([N])
-    # print(p_inlet)
-
-    # for index, (k, eps) in enumerate(zip(permeability, porosity)):
+    ns.Tin = doublet.well.Ti_inj
+    ns.Tout = doublet.T_HE
+    ns.T0 = doublet.T_HE
+    ns.qh = aquifer.labda_s * aquifer.labda #heat source production rocks [W/m^2]
+    ns.ρf = aquifer.rho_f
+    ns.ρ = ns.ρf #* (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)  #no lhsT in lhsp
+    ns.lambdl = aquifer.labda_l #'thermal conductivity liquid [W/mK]'
+    ns.lambds = aquifer.labda_s #'thermal conductivity solid [W/mK]'
     k_int_x = k #'intrinsic permeability [m2]'
     k_int_y = k #'intrinsic permeability [m2]'
     k_int= (k_int_x,k_int_y)
     ns.k = ((aquifer.rho_f*aquifer.g)/aquifer.mu)*np.diag(k_int)
-    ns.ρ = aquifer.rho_f
-    ns.u_i = '-k_ij (p_,j + (ρ g_1)_,j)' #darcy velocity in terms of pressure and gravity
-    # ns.u_i = '-k_ij p_,j + k_ij rho g_i x_,j'  # (u_k t)_,k
-
-    epsilon = eps #'porosity [%]'
-    ns.u0 = (ns.mdot / (aquifer.rho_f * ns.Awell)) * epsilon
+    ns.u_i = 'k_ij (p_,j + (ρ g_1)_,j)' #darcy velocity
+    ns.u0 = (ns.mdot / (ns.ρ * ns.Awell)) * epsilon
     ns.qf = ns.u0
-    ns.lambd = epsilon * lambdl + (1 - epsilon) * lambds  # heat conductivity [W/m/K]
+    ns.λ = epsilon * ns.lambdl + (1 - epsilon) * ns.lambds  # heat conductivity λ [W/m/K]
 
-    # define initial conditions thermal part
-    # numpy.random.seed(seed)
-    # sqr = domain.integral('(t - t_0) (t - t_0)' @ ns, degree=degree * 2)
-    # tdofs0 = solver.optimize('t', sqr) * numpy.random.normal(1, .1, len(
-    #     ns.ubasis))  # set initial condition to t=t_0 with small random noise
-    # state0 = dict(t=tdofs0)
+    # define dirichlet constraints for hydraulic process
+    sqrp = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       # set outflow condition to p=p_out
+    consp = solver.optimize('lhsp', sqrp, droptol=1e-15)
+    # consp = dict(lhsp=consp)
 
-    # define dirichlet constraints for hydraulic part
-    sqr = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       #outflow condition p=p_out
-    # sqr += topo.boundary['top'].integral('(p - pbu) (p - pbu) d:x' @ ns, degree=degree * 2)       #upper bound condition p=p_bbu
-    # sqr += topo.boundary['bottom'].integral('(p - pbl) (p - pbl) d:x' @ ns, degree=degree * 2)       #lower bound condition p=p_pbl
-    # sqr = topo.boundary['right'].integral('(p)^2 d:x' @ ns, degree=degree * 2)       #outflow condition p=0
-    # sqr = topo.boundary['left'].integral('(u_i - u0_i) (u_i - u0_i) d:x' @ ns, degree=degree*2) #inflow condition u=u_0
-    # sqr += topo.boundary['top,bottom'].integral('(u_i n_i)^2 d:x' @ ns, degree=degree*2)      #symmetry top and bottom u.n = 0
-    cons = solver.optimize('lhs', sqr, droptol=1e-15)
+    # formulate hydraulic process single field
+    resp = topo.integral('(u_i pbasis_n,i) d:x' @ ns, degree=degree*2) # formulation of darcy velocity
+    resp -= topo.boundary['left'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) # set inflow boundary to q=u0
+    resp += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
 
-    # Hydraulic process mixed formulation
-    # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
-    # res += topo.integral('ubasis_ni ρ g_i' @ ns, degree=2)               #hydraulic gradient
-    # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
-    # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
-    # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
+    lhsp = solver.solve_linear('lhsp', resp, constrain=consp)
 
-    # res += topo.integral('pbasis_n,i ρ g_i' @ ns, degree=2)               #hydraulic gradient
+    # introduce temperature dependent variables
+    ns.ρ = ns.ρf * (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)
 
-    # Hydraulic process single field formulation
-    res = topo.integral('(k_ij p_,j pbasis_n,i) d:x' @ ns, degree=degree*2) #darcy velocity
-    res -= topo.boundary['left'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) #source flux boundary
-    res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
+    # define initial condition for thermo process
+    sqr = topo.integral('(T - T0) (T - T0)' @ ns, degree=degree * 2) # set initial temperature to T=T0
+    Tdofs0 = solver.optimize('lhsT', sqr)
+    # stateT0 = dict(lhsT=Tdofs0)
 
-    # res = topo.integral('(ubasis_ni (mhu / k) u_i - ubasis_ni,i p) d:x' @ ns, degree=degree*2) #darcy velocity
-    # res += topo.integral('ubasis_ni ρ g_i' @ ns, degree=2)               #hydraulic gradient
-    # res += topo.integral('pbasis_n u_i,i d:x' @ ns, degree=degree*2)
-    # res += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i ) d:x' @ ns, degree=degree*2)         #de term u.n = qf op boundary
-    # res -= topo.integral('(pbasis_n qf) d:x' @ ns, degree=degree*2)         #source/sink term
+    # define dirichlet constraints for thermo process
+    # sqrT = topo.boundary['left'].integral('(T - Tin) (T - Tin) d:x' @ ns, degree=degree*2) # set temperature injection pipe to T=Tin
+    sqrT = topo.boundary['left, bottom, top'].integral('(T - T0) (T - T0) d:x' @ ns, degree=degree*2)  #set bottom temperature T=T0
+    consT = solver.optimize('lhsT', sqrT, droptol=1e-15)
+    consT = dict(lhsT=consT)
 
-    lhs0 = solver.solve_linear('lhs', res, constrain=cons)
+    # formulate thermo process
+    resT = topo.integral('(ρ cf Tbasis_n (u_k T)_,k ) d:x' @ ns, degree=degree*2) # formulation of convection of energy
+    resT -= topo.integral('Tbasis_n,i (- λ) T_,i d:x' @ ns, degree=degree*2) # formulation of conductive heat flux
+    resT -= topo.boundary['top,bottom'].integral('Tbasis_n qh d:x' @ ns, degree=degree*2) # heat flux on boundary
+    # resT -= topo.integral('Tbasis_n qh d:x' @ ns, degree=degree*2)  # heat source/sink term within domain
+    Tinertia = topo.integral('ρ cf Tbasis_n T d:x' @ ns, degree=degree*4)
 
-    # with treelog.iter.plain('timestep', solver.impliciteuler(('u', 'p'), residual=(ures, pres), inertia=(uinertia, None),
-    #                                              arguments=state0, timestep=timestep, constrain=cons,
-    #                                              newtontol=1e-10)) as steps:
+    # time
+    timestep = 0.1
+    endtime = 5
+
+    # # Time dependent heat transport process
+    # bezier = topo.sample('bezier', 9)
+    # with treelog.iter.plain(
+    #         'timestep', solver.impliciteuler(('lhsp', 'lhsT'), residual=(resp, resT), inertia=(None, Tinertia),
+    #          arguments=stateT0, timestep=timestep, constrain=(consp, consT),
+    #          newtontol=1e-10)) as steps:
+    #
     #     for istep, state in enumerate(steps):
     #
-    #         t = istep * timestep
-    #         # x, p, u, t = bezier.eval(['x_i', 'p', 'u_i', 't'] @ ns, lhs=lhs0, lhst=lhsT)
-    #         x, u, normu, p = bezier.eval(['x_i', 'u_i', 'sqrt(u_k u_k)', 'p'] @ ns, **state)
-    #         ugrd = interpolate[xgrd](u)
+    #         time = istep * timestep
+    #         x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
     #
-    #         if t >= endtime:
+    #         if time >= endtime:
     #             break
     #
-    #         xgrd = util.regularize(bbox, spacing, xgrd + ugrd * timestep)
-    #
-    # return state0, state
+    # return state
 
-    # Heat transport process
-
-    sqrT = topo.boundary['left'].integral('(t - tin) (t - tin) d:x' @ ns, degree=degree*2)      #temperature injection pipe
-    # sqrT += topo.integral('(t - 50) (t - 50) d:x' @ ns, degree=degree*2)  #initial temperature in domain
-    # sqrT = topo.boundary['right'].integral('(t - tout) (t - tout) d:x' @ ns, degree=degree*2)  #temperature production pipe
-    # sqrT += topo.boundary['top,bottom'].integral('(t_,i n_i)^2 d:x' @ ns, degree=degree*2)      #symmetry top and bottom t_,i.n = 0
-    # sqrT += topo.boundary['bottom'].integral('(t_,i n_i - tc) (t_,i n_i - tc) d:x' @ ns, degree=degree*2) #heat flux bottom
-    const = solver.optimize('lhst', sqrT, droptol=1e-15)
-
-    rest = topo.integral('(ρ cf tbasis_n (u_k t)_,k ) d:x' @ ns, degree=degree*2) #convection of energy
-    rest -= topo.boundary['top,bottom'].integral('tbasis_n qh d:x' @ ns, degree=degree*2) #heat flux boundary
-    rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree * 2)  # heat flux boundary
-    rest -= topo.integral('tbasis_n,i (- lambd) t_,i d:x' @ ns, degree=degree*2) #conductive heat flux
-
-    rest -= topo.integral('tbasis_n qh d:x' @ ns, degree=degree*2)  #heat source/sink term
-
-    lhsT = solver.newton('lhst', rest, constrain=const, arguments=dict(lhs=lhs0)).solve(tol=1e-2)
+    lhsT = solver.newton('lhsT', resT, constrain=consT, arguments=dict(lhsp=lhsp)).solve(tol=1e-2)
 
 
     #################
     # Postprocessing
     #################
 
-    bezier = topo.sample('bezier', 9)
-    # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhs=lhs0)
-    x, p, u, t = bezier.eval(['x_i', 'p', 'u_i', 't'] @ ns, lhs=lhs0,lhst=lhsT)
+    bezier = topo.sample('bezier', 5)
+    # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhsp=lhsp)
+    x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
 
     fig, axs = plt.subplots(3, sharex=True, sharey=True)
     fig.suptitle('2D Aquifer')
@@ -481,14 +383,23 @@ def DoubletFlow(aquifer, well, doublet, k, eps):
     plt.xlabel('x')
     plt.ylabel('z')
 
-    plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, t, shading='gouraud', rasterized=True)
+    plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, T, shading='gouraud', rasterized=True)
     fig.colorbar(plot2, ax=axs[2], label="T [C]")
     # # print(index)
     bar = 1e5
     p_inlet = p[0]/bar
     # # print(p_inlet)
-    # # print("temperature", t)
-    T_prod = t[-1]
+
+    def add_value_to_plot():
+        for i, j in zip(x[:,0], x[:,1]):
+            for index in range(len(T)):
+                print(T[index], index)
+                # axs[2].annotate(T[index], xy=(i, j))
+
+    add_value_to_plot()
+
+    print("temperature", eval("ns.T").shape, len(T))
+    T_prod = T[-1]
 
     plt.show()
 

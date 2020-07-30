@@ -6,7 +6,7 @@ from scipy import stats
 import math
 import pandas as pd
 # import seaborn as sns
-from myUQ import *
+# from myUQ import *
 from matplotlib import pyplot as plt
 
 ## Parameters txt file reader
@@ -38,6 +38,7 @@ def generate_txt( filename):
         'Cp_f' : 4183,
         'Cp_s' : 870, #910
         'labda_s' : 4.2, #was 1.9
+        'labda_l': 0.663,
         'g' : 9.81
     })
     data['well'] = []
