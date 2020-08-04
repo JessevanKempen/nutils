@@ -6,7 +6,7 @@ import math
 import pandas as pd
 # import seaborn as sns
 
-fig, ax = plt.subplots(2)
+# fig, ax = plt.subplots(2)
 
 # standard deviation of normal distribution K
 # sigma_K = 1
@@ -108,7 +108,7 @@ def plot_samples_permeability(distributionPermeability):
 # frozen_norm = stats.norm(loc=mu_epsilon, scale=sigma_epsilon)
 # ax[1].plot(x2,frozen_norm.pdf(x2))
 
-ax[1].set(xlabel='Porosity [-]', ylabel='Probability')
+# ax[1].set(xlabel='Porosity [-]', ylabel='Probability')
 
 # # Using map() and lambda
 # def listOfTuples(l1, l2):

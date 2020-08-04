@@ -16,9 +16,9 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 5
+N = 1
 
-# Forward or Bayesian Inference calculation
+# Forward/Bayesian Inference calculation
 performInference = False
 
 # Location to store output

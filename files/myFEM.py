@@ -2,6 +2,7 @@ from nutils import mesh, function, solver, util, export, cli, testing
 import numpy as np, treelog
 from matplotlib import pyplot as plt
 from scipy.stats import norm
+from matplotlib import collections, colors
 import pandas as pd
 # import seaborn as sns
 import matplotlib.pyplot as plt
@@ -273,6 +274,16 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     topo, geom = mesh.rectilinear([vertsX, vertsY])
     # topo = topo.withboundary(inner='left', outer='right')
 
+    bezier = topo.sample('bezier', 3)
+    points, vals = bezier.eval([geom, 0])
+
+    # # plot
+    # plt.figure(figsize=(10, 10))
+    # cmap = colors.ListedColormap("limegreen")
+    # plt.tripcolor(points[:, 0], points[:, 1], bezier.tri, vals, shading='gouraud', cmap=cmap)
+    # ax = plt.gca()
+    # ax.add_collection(collections.LineCollection(points[bezier.hull], colors='r', linewidth=2, alpha=1))
+
     # create namespace
     ns = function.Namespace()
     degree = 3
@@ -290,14 +301,15 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     ns.Awell = well.A_well
     ns.nyy = 0, 1
     ns.pout = doublet.P_aquifer
-    ns.Tin = doublet.well.Ti_inj
-    ns.Tout = doublet.T_HE
-    ns.T0 = doublet.T_HE
-    ns.qh = aquifer.labda_s * aquifer.labda #heat source production rocks [W/m^2]
+    ns.Tatm = 20 + 273
+    ns.Tin = doublet.well.Ti_inj + 273
+    ns.Tout = doublet.T_HE + 273
+    ns.T0 = doublet.T_HE + 273
     ns.ρf = aquifer.rho_f
     ns.ρ = ns.ρf #* (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)  #no lhsT in lhsp
     ns.lambdl = aquifer.labda_l #'thermal conductivity liquid [W/mK]'
     ns.lambds = aquifer.labda_s #'thermal conductivity solid [W/mK]'
+    ns.qh = ns.lambds * aquifer.labda #heat source production rocks [W/m^2]
     k_int_x = k #'intrinsic permeability [m2]'
     k_int_y = k #'intrinsic permeability [m2]'
     k_int= (k_int_x,k_int_y)
@@ -306,6 +318,19 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     ns.u0 = (ns.mdot / (ns.ρ * ns.Awell)) * epsilon
     ns.qf = ns.u0
     ns.λ = epsilon * ns.lambdl + (1 - epsilon) * ns.lambds  # heat conductivity λ [W/m/K]
+
+    # define custom nutils function
+    class MyFunc(function.Pointwise):
+        r = 0.2
+        x0 = 50
+        y0 = 14
+
+        @staticmethod
+        def evalf(x, y):
+            return np.heaviside((x - x0) ** 2 + (y - y0) ** 2 - r ** 2, 1)
+
+    # add to the namespace
+    # ns.myfunc = MyFunc(ns.x[0], ns.x[1])
 
     # define dirichlet constraints for hydraulic process
     sqrp = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       # set outflow condition to p=p_out
@@ -317,19 +342,22 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     resp -= topo.boundary['left'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) # set inflow boundary to q=u0
     resp += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
 
+    # solve for transient state of pressure
     lhsp = solver.solve_linear('lhsp', resp, constrain=consp)
 
     # introduce temperature dependent variables
     ns.ρ = ns.ρf * (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)
+    ns.lambdl = 4187.6 * (-922.47 + 2839.5 * (ns.T / ns.Tatm) - 1800.7 * (ns.T / ns.Tatm)**2 + 525.77*(ns.T / ns.Tatm)**3 - 73.44*(ns.T / ns.Tatm)**4)
+    # ns.cf = 3.3774 - 1.12665e-2 * ns.T + 1.34687e-5 * ns.T**2 # if temperature above T=100 [K]
 
     # define initial condition for thermo process
     sqr = topo.integral('(T - T0) (T - T0)' @ ns, degree=degree * 2) # set initial temperature to T=T0
     Tdofs0 = solver.optimize('lhsT', sqr)
-    # stateT0 = dict(lhsT=Tdofs0)
+    stateT0 = dict(lhsT=Tdofs0)
 
     # define dirichlet constraints for thermo process
-    # sqrT = topo.boundary['left'].integral('(T - Tin) (T - Tin) d:x' @ ns, degree=degree*2) # set temperature injection pipe to T=Tin
-    sqrT = topo.boundary['left, bottom, top'].integral('(T - T0) (T - T0) d:x' @ ns, degree=degree*2)  #set bottom temperature T=T0
+    sqrT = topo.boundary['left'].integral('(T - Tin) (T - Tin) d:x' @ ns, degree=degree*2) # set temperature injection pipe to T=Tin
+    # sqrT = topo.boundary['left, bottom, top'].integral('(T - T0) (T - T0) d:x' @ ns, degree=degree*2)  #set bottom temperature T=T0
     consT = solver.optimize('lhsT', sqrT, droptol=1e-15)
     consT = dict(lhsT=consT)
 
@@ -341,54 +369,71 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     Tinertia = topo.integral('ρ cf Tbasis_n T d:x' @ ns, degree=degree*4)
 
     # time
-    timestep = 0.1
-    endtime = 5
+    timestep = 1
+    endtime = 60
 
-    # # Time dependent heat transport process
-    # bezier = topo.sample('bezier', 9)
-    # with treelog.iter.plain(
-    #         'timestep', solver.impliciteuler(('lhsp', 'lhsT'), residual=(resp, resT), inertia=(None, Tinertia),
-    #          arguments=stateT0, timestep=timestep, constrain=(consp, consT),
-    #          newtontol=1e-10)) as steps:
-    #
-    #     for istep, state in enumerate(steps):
-    #
-    #         time = istep * timestep
-    #         x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
-    #
-    #         if time >= endtime:
-    #             break
-    #
-    # return state
+    def make_plots():
+        fig, ax = plt.subplots(2)
 
-    lhsT = solver.newton('lhsT', resT, constrain=consT, arguments=dict(lhsp=lhsp)).solve(tol=1e-2)
+        ax[0].set(xlabel='X [m]', ylabel='Pressure [Bar]')
+        ax[0].plot(x[:,0].take(bezier.tri.T, 0), p.take(bezier.tri.T, 0))
+
+        ax[1].set(xlabel='X [m]', ylabel='Temperature [Celcius]')
+        ax[1].plot(x[:,0].take(bezier.tri.T, 0), T.take(bezier.tri.T, 0)-273)
+
+        fig, axs = plt.subplots(3, sharex=True, sharey=True)
+        fig.suptitle('2D Aquifer')
+
+        plot0 = axs[0].tripcolor(x[:, 0], x[:, 1], bezier.tri, p / 1e5, shading='gouraud', rasterized=True)
+        fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
+
+        plot1 = axs[1].tripcolor(x[:, 0], x[:, 1], bezier.tri, u[:, 0], vmin=0, vmax=0.05, shading='gouraud',
+                                 rasterized=True)
+        fig.colorbar(plot1, ax=axs[1], label="Darcy Ux [m/s]")
+        plt.xlabel('x')
+        plt.ylabel('z')
+
+        plot2 = axs[2].tripcolor(x[:, 0], x[:, 1], bezier.tri, T-273, shading='gouraud', rasterized=True)
+        fig.colorbar(plot2, ax=axs[2], label="T [C]")
+
+        plt.show()
+
+    # Time dependent heat transport process
+    bezier = topo.sample('bezier', 5)
+    with treelog.iter.plain(
+            'timestep', solver.impliciteuler(('lhsT'), residual=resT, inertia=Tinertia,
+             arguments=dict(lhsp=lhsp, lhsT=Tdofs0), timestep=timestep, constrain=consT,
+             newtontol=1e-2)) as steps:
+
+        for istep, lhsT in enumerate(steps):
+
+            time = istep * timestep
+            # x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
+            x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
+
+            if time >= endtime:
+                print(x[:,0], T)
+
+                make_plots()
+                break
+
+    bar = 1e5
+    p_inlet = p[0]/bar
+    T_prod = T[-1]
+
+    return p_inlet, T_prod
+
+    # solve for steady state of temperature
+    # lhsT = solver.newton('lhsT', resT, constrain=consT, arguments=dict(lhsp=lhsp)).solve(tol=1e-2)
 
 
     #################
     # Postprocessing
     #################
 
-    bezier = topo.sample('bezier', 5)
-    # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhsp=lhsp)
-    x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
-
-    fig, axs = plt.subplots(3, sharex=True, sharey=True)
-    fig.suptitle('2D Aquifer')
-
-    plot0 = axs[0].tripcolor(x[:,0], x[:,1], bezier.tri, p/1e5, shading='gouraud', rasterized=True)
-    fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
-
-    plot1 = axs[1].tripcolor(x[:,0], x[:,1], bezier.tri, u[:,0], vmin=0, vmax=0.05, shading='gouraud', rasterized=True)
-    fig.colorbar(plot1, ax=axs[1], label="Darcy Ux [m/s]")
-    plt.xlabel('x')
-    plt.ylabel('z')
-
-    plot2 = axs[2].tripcolor(x[:,0], x[:,1], bezier.tri, T, shading='gouraud', rasterized=True)
-    fig.colorbar(plot2, ax=axs[2], label="T [C]")
-    # # print(index)
-    bar = 1e5
-    p_inlet = p[0]/bar
-    # # print(p_inlet)
+    # bezier = topo.sample('bezier', 5)
+    # # x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhsp=lhsp)
+    # x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
 
     def add_value_to_plot():
         for i, j in zip(x[:,0], x[:,1]):
@@ -396,12 +441,9 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
                 print(T[index], index)
                 # axs[2].annotate(T[index], xy=(i, j))
 
-    add_value_to_plot()
+    # add_value_to_plot()
 
     print("temperature", eval("ns.T").shape, len(T))
-    T_prod = T[-1]
-
-    plt.show()
 
     # fig, ax = plt.subplots(4)
     # density = 'True'
@@ -488,5 +530,3 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     # # ax1.set_title('Simplest default with labels')
     #
     # plt.show()
-
-    return p_inlet, T_prod
