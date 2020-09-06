@@ -86,37 +86,37 @@ if __name__ == '__main__':
 # this by providing :func:`nutils.testing.TestCase.assertAlmostEqual64` for the
 # embedding of desired results as compressed base64 data.
 
-class test(testing.TestCase):
-
-  @testing.requires('matplotlib')
-  def test_spline(self):
-    err, cons, lhs = main(nelems=4, etype='square', btype='spline', degree=2, traction=.1, maxrefine=2, radius=.5, poisson=.3)
-    with self.subTest('l2-error'):
-      self.assertAlmostEqual(err[0], .00033, places=5)
-    with self.subTest('h1-error'):
-      self.assertAlmostEqual(err[1], .00672, places=5)
-    with self.subTest('constraints'): self.assertAlmostEqual64(cons, '''
-      eNpjaGBoYGBAxvrnGBow4X89g3NQFSjQwLAGq7i10Wus4k+NfM8fNWZgOGL89upc47WX0ozvXjAzPn1e
-      1TjnPACrACoJ''')
-    with self.subTest('left-hand side'): self.assertAlmostEqual64(lhs, '''
-      eNpbZHbajIHhxzkGBhMgtgdi/XPypyRPvjFxO/PccPq5Vn2vcxr6luf+6xmcm2LMwLDQePf5c0bTzx8x
-      5D7vaTjnnIFhzbmlQPH5xhV39Y3vXlxtJHoh2EjvvLXR63MbgOIbjRdfrTXeecnUeO+Fn0Yrzj818j1/
-      FCh+xPjt1bnGay+lGd+9YGZ8+ryqcc55AK+AP/0=''')
-
-  @testing.requires('matplotlib')
-  def test_mixed(self):
-    err, cons, lhs = main(nelems=4, etype='mixed', btype='std', degree=2, traction=.1, maxrefine=2, radius=.5, poisson=.3)
-    with self.subTest('l2-error'):
-      self.assertAlmostEqual(err[0], .00024, places=5)
-    with self.subTest('h1-error'):
-      self.assertAlmostEqual(err[1], .00739, places=5)
-    with self.subTest('constraints'): self.assertAlmostEqual64(cons, '''
-      eNpjaGDADhlwiOEU1z8HZusbgukkg5BzRJqKFRoa1oD1HzfceA5NH9FmgKC10SuwOdONpM7DxDYa77gM
-      MueoMQPDEePzV2Hic42XXmoynnQRxvc3dryQbnz3Aoj91Mj3vJnx6fOqxjnnAQzkV94=''')
-    with self.subTest('left-hand side'): self.assertAlmostEqual64(lhs, '''
-      eNoNzE8og3EcBvC3uUo5rNUOnBSK9/19n0Ic0Eo5oJBmRxcaB04kUnPgoETmT2w7LVrtMBy4auMw+35/
-      7/vaykFSFEopKTnIe/jU01PPU6FNWcQIn+Or5CBfSqCGD1uDYhi7/KbW+dma5aK65gX6Y8Po8HSzZQ7y
-      vBniHyvFV9aq17V7TK42O9kwFS9YUzxhjXIcZxLCnIzjTsfxah/BMFJotjUlZYz6xYeoPqEPKaigbKhb
-      9lOj9NGa9KgtVmqJH9UT36gcp71dEr6HaVS5GS8f46AcQ9itx739SQXdBL8dRqeTo1odox35poh2yJVh
-      apEueucsRWWPgpJFoLKPNzeHC/fU+yl48pDyMi6dCFbsBNJODNu2iawOoE4PoVdP4kH/UkZeaEDaUJQG
-      zMg/DouRUg==''')
+# class test(testing.TestCase):
+#
+#   @testing.requires('matplotlib')
+#   def test_spline(self):
+#     err, cons, lhs = main(nelems=4, etype='square', btype='spline', degree=2, traction=.1, maxrefine=2, radius=.5, poisson=.3)
+#     with self.subTest('l2-error'):
+#       self.assertAlmostEqual(err[0], .00033, places=5)
+#     with self.subTest('h1-error'):
+#       self.assertAlmostEqual(err[1], .00672, places=5)
+#     with self.subTest('constraints'): self.assertAlmostEqual64(cons, '''
+#       eNpjaGBoYGBAxvrnGBow4X89g3NQFSjQwLAGq7i10Wus4k+NfM8fNWZgOGL89upc47WX0ozvXjAzPn1e
+#       1TjnPACrACoJ''')
+#     with self.subTest('left-hand side'): self.assertAlmostEqual64(lhs, '''
+#       eNpbZHbajIHhxzkGBhMgtgdi/XPypyRPvjFxO/PccPq5Vn2vcxr6luf+6xmcm2LMwLDQePf5c0bTzx8x
+#       5D7vaTjnnIFhzbmlQPH5xhV39Y3vXlxtJHoh2EjvvLXR63MbgOIbjRdfrTXeecnUeO+Fn0Yrzj818j1/
+#       FCh+xPjt1bnGay+lGd+9YGZ8+ryqcc55AK+AP/0=''')
+#
+#   @testing.requires('matplotlib')
+#   def test_mixed(self):
+#     err, cons, lhs = main(nelems=4, etype='mixed', btype='std', degree=2, traction=.1, maxrefine=2, radius=.5, poisson=.3)
+#     with self.subTest('l2-error'):
+#       self.assertAlmostEqual(err[0], .00024, places=5)
+#     with self.subTest('h1-error'):
+#       self.assertAlmostEqual(err[1], .00739, places=5)
+#     with self.subTest('constraints'): self.assertAlmostEqual64(cons, '''
+#       eNpjaGDADhlwiOEU1z8HZusbgukkg5BzRJqKFRoa1oD1HzfceA5NH9FmgKC10SuwOdONpM7DxDYa77gM
+#       MueoMQPDEePzV2Hic42XXmoynnQRxvc3dryQbnz3Aoj91Mj3vJnx6fOqxjnnAQzkV94=''')
+#     with self.subTest('left-hand side'): self.assertAlmostEqual64(lhs, '''
+#       eNoNzE8og3EcBvC3uUo5rNUOnBSK9/19n0Ic0Eo5oJBmRxcaB04kUnPgoETmT2w7LVrtMBy4auMw+35/
+#       7/vaykFSFEopKTnIe/jU01PPU6FNWcQIn+Or5CBfSqCGD1uDYhi7/KbW+dma5aK65gX6Y8Po8HSzZQ7y
+#       vBniHyvFV9aq17V7TK42O9kwFS9YUzxhjXIcZxLCnIzjTsfxah/BMFJotjUlZYz6xYeoPqEPKaigbKhb
+#       9lOj9NGa9KgtVmqJH9UT36gcp71dEr6HaVS5GS8f46AcQ9itx739SQXdBL8dRqeTo1odox35poh2yJVh
+#       apEueucsRWWPgpJFoLKPNzeHC/fU+yl48pDyMi6dCFbsBNJODNu2iawOoE4PoVdP4kH/UkZeaEDaUJQG
+#       zMg/DouRUg==''')

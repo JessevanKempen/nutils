@@ -25,11 +25,11 @@ def generate_txt( filename):
     data = {}
     data['aquifer'] = []
     data['aquifer'].append({
-        'd_top': 2200,
+        'd_top': 2387,
         'labda': 0.031,
-        'H': 140,
-        'T_surface': 20,
-        'porosity': 0.05,
+        'H': 2528-2387,
+        'T_surface': 20+273,
+        'porosity': 0.2,
         'permeability': 9e-10,
         'rho_f': 996.9,
         'rho_s': 2400, #2711
@@ -39,14 +39,15 @@ def generate_txt( filename):
         'Cp_s' : 870, #910
         'labda_s' : 4.2, #was 1.9
         'labda_l': 0.663,
+        'saltcontent': 0.155, # [kg/l]
         'g' : 9.81
     })
     data['well'] = []
     data['well'].append({
         'r': 0.126, #0.076,
-        'Q': 330/3600,
+        'Q': 250/3600,
         'L': 1000,
-        'Ti_inj': 30,
+        'Ti_inj': 30+273,
         'epsilon': 0.046,
     })
 

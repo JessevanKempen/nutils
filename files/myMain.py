@@ -1,6 +1,7 @@
 from myIOlib import *
 from myFEM import *
 from myUQ import *
+from myModel import *
 import numpy as np
 import arviz as az
 from scipy import stats
@@ -16,7 +17,11 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 1
+N = 10
+
+# Define time of simulation
+timestep = 1
+endtime = 100
 
 # Forward/Bayesian Inference calculation
 performInference = False
@@ -36,25 +41,25 @@ params_aquifer, params_well = read_from_txt( "parameters.txt" )
 print("Constructing the FE model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
-doublet = DoubletGenerator(aquifer, well)
+doublet = DoubletGenerator(aquifer, well, timestep)
 
 # Run Analytical Model
-print("Running Analytical Analysis...")
+print("\r\nRunning Analytical Analysis...")
 PumpTest(doublet)
 
 # Set stoichastic parameters
-print("Setting stoichastic parameters...")
+print("\r\nSetting stoichastic parameters...")
 porosity = get_samples_porosity(N)
 permeability = get_samples_permeability(porosity, N)
 
 if not performInference:
     # Run Finite Element Model (Forward)
-    print("Running FE model...")
+    print("\r\nRunning FE model...")
     p_model = np.empty([N])
     T_model = np.empty([N])
 
     for index, (k, eps) in enumerate(zip(permeability, porosity)):
-        sol = DoubletFlow(aquifer, well, doublet, k, eps)
+        sol = DoubletFlow(aquifer, well, doublet, k, eps, timestep, endtime)
 
         p_model[index] = sol[0]
         T_model[index] = sol[1]
@@ -67,6 +72,12 @@ if not performInference:
     stddv_p = np.var(p_model) ** 0.5
     print("T_outlet mean", mu_T, "T_outlet sd", stddv_T)
     print("p_inlet mean", mu_p, "p_inlet sd", stddv_p)
+
+    # Sobal 1st order sensitivity index with 10 parameters
+    # for i in length(parameter):
+    #     S(i) =  np.var(parameter(i)) / np.var(T_model)
+
+
 else:
     # Run Bayesian Inference
     import pymc3 as pm
@@ -115,14 +126,14 @@ else:
 
 
         # Expected value of outcome (problem is that i can not pass a pdf to my external model function, now i pass N random values to the function, which return N random values back, needs to be a pdf again)
-        print("Running FE model...", permeability_samples, 'por', porosity_samples)
+        print("\r\nRunning FE model...", permeability_samples, 'por', porosity_samples)
 
         p_model = np.empty([N])
         T_model = np.empty([N])
         bar = 1e5
 
         for index, (k, epsilon) in enumerate(zip(permeability.random(size=N), porosity_samples)):
-            p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon)
+            p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime)
 
             p_model[index] = p_inlet
             T_model[index] = T_prod
@@ -140,6 +151,9 @@ else:
         # Inference
         start = pm.find_MAP()                      # Find starting value by optimization
         step = pm.NUTS(scaling=start)              # Instantiate MCMC sampling algoritm
+
+        #pm.Metropolis()   pm.GaussianRandomWalk()
+
         trace = pm.sample(1000, start=start, step=step, cores=1, chains=chains) # Draw 1000 posterior samples using NUTS sampling
         # print("length posterior", len(trace['permeability']), trace.get_values('permeability', combine=True), len(trace.get_values('permeability', combine=True)))
 
@@ -240,7 +254,7 @@ t1 = time.time()
 print("CPU time        [s]          : ", t1 - t0)
 
 # Stop timing code execution
-print("Done. Post-processing...")
+print("\r\nDone. Post-processing...")
 # plot_solution(sol, outfile)
 
 # plot last FEM

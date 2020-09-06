@@ -1,15 +1,63 @@
-import math
+import matplotlib.pyplot as plt
 
-#permeability milidarcy to hydraulic conductivity m/s
+from nutils import mesh, function, solver, export, cli, topology
+from matplotlib import collections
+import numpy
 
-mD = 9.869233e-13/1000
-k = 1*mD
-rho = 1080
-g = 9.81
-mhu = 0.46*1e-3
 
-K = (k*rho*g)/mhu
-print("hydraulic conductivity is", K)
+def main(viscosity=1.3e-3, density=1e3, pout=0., nelems=10):
+  domain, geom = mesh.rectilinear([numpy.linspace(0, 1, nelems), numpy.linspace(0, 1, nelems), [0, 2 * numpy.pi]],
+                                  periodic=[2])
+
+  ns = function.Namespace()
+  ns.r, ns.y, ns.I = geom
+  ns.x_i = '<r cos(I), y, r sin(I)>_i'
+  ns.urbasis, ns.uybasis, ns.pbasis = function.chain([
+    domain.basis('std', degree=3, removedofs=((0, -1), None, None)),  # remove normal component at r=0 and r=1
+    domain.basis('std', degree=3, removedofs=((-1,), None, None)),  # remove tangential component at r=1 (no slip)
+    domain.basis('std', degree=2)])
+  ns.ubasis_ni = '<urbasis_n cos(I), uybasis_n, urbasis_n sin(I)>_i'
+  ns.viscosity = viscosity
+  ns.density = density
+  ns.u_i = 'ubasis_ni ?lhs_n'
+  ns.p = 'pbasis_n ?lhs_n'
+  ns.sigma_ij = 'viscosity (u_i,j + u_j,i) - p δ_ij'
+  ns.pout = pout
+  ns.tout_i = '-pout n_i'
+  ns.uin_i = '-n_i'  # uniform inflow
+
+  res = domain.integral('(viscosity ubasis_ni,j u_i,j - p ubasis_ni,i + pbasis_n u_k,k) d:x' @ ns, degree=6)
+  res -= domain.boundary['top'].integral('ubasis_ni tout_i d:x' @ ns, degree=6)
+
+  sqr = domain.boundary['bottom'].integral('(u_i - uin_i) (u_i - uin_i) d:x' @ ns, degree=6)
+  cons = solver.optimize('lhs', sqr, droptol=1e-15)
+
+  lhs = solver.solve_linear('lhs', res, constrain=cons)
+
+  plottopo = domain[:, :, 0:].boundary['back']
+
+  bezier = plottopo.sample('bezier', 10)
+  r, y, p, u = bezier.eval([ns.r, ns.y, ns.p, function.norm2(ns.u)], lhs=lhs)
+  with export.mplfigure('pressure.png', dpi=800) as fig:
+    ax = fig.add_subplot(111, title='pressure', aspect=1)
+    ax.autoscale(enable=True, axis='both', tight=True)
+    im = ax.tripcolor(r, y, bezier.tri, p, shading='gouraud', cmap='jet')
+    ax.add_collection(collections.LineCollection(numpy.array([r,y]).T[bezier.hull], colors='k', linewidths=0.2, alpha=0.2))
+    fig.colorbar(im)
+
+  uniform = plottopo.sample('uniform', 1)
+  r_, y_, uv = uniform.eval([ns.r, ns.y, ns.u], lhs=lhs)
+  with export.mplfigure('velocity.png', dpi=800) as fig:
+    ax = fig.add_subplot(111, title='Velocity', aspect=1)
+    ax.autoscale(enable=True, axis='both', tight=True)
+    im = ax.tripcolor(r, y, bezier.tri, u, shading='gouraud', cmap='jet')
+    ax.quiver(r_, y_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
+    fig.colorbar(im)
+
+
+cli.run(main)
+
+
 
 #everything that came out of my model as comment
 
@@ -82,3 +130,16 @@ print("hydraulic conductivity is", K)
 #         """
 #         y = domain[1] * ID_y
 #         return y
+
+# # define custom nutils function
+# class MyFunc(function.Pointwise):
+#     r = 0.2
+#     x0 = 50
+#     y0 = 14
+#
+#     @staticmethod
+#     def evalf(x, y):
+#         return np.heaviside((x - x0) ** 2 + (y - y0) ** 2 - r ** 2, 1)
+#
+# # add to the namespace
+# # ns.myfunc = MyFunc(ns.x[0], ns.x[1])

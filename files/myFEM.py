@@ -1,5 +1,6 @@
 from nutils import mesh, function, solver, util, export, cli, testing
 import numpy as np, treelog
+from CoolProp.CoolProp import PropsSI
 from matplotlib import pyplot as plt
 from scipy.stats import norm
 from matplotlib import collections, colors
@@ -16,7 +17,8 @@ class Aquifer:
 
         self.d_top = aquifer['d_top'] # depth top aquifer at production well
         self.labda = aquifer['labda']  # geothermal gradient
-        self.H = aquifer['H']  # thickness aquifer
+        self.H = np.random.uniform(low=55, high=140) #aquifer['H']  # thickness aquifer
+        print("thickness", self.H)
         self.T_surface = aquifer['T_surface']
         self.porosity = aquifer['porosity']
         self.rho_f = aquifer['rho_f']
@@ -27,6 +29,7 @@ class Aquifer:
         self.Cp_s = aquifer['Cp_s'] #heat capacity limestone [J/kg K]
         self.labda_s = aquifer['labda_s'] # thermal conductivity solid [W/mK]
         self.labda_l = aquifer['labda_l'] # thermal conductivity solid [W/mK]
+        self.saltcontent = aquifer['saltcontent'] # [kg/l]
         self.g = 9.81 # gravity constant
 
 class Well:
@@ -48,7 +51,7 @@ class DoubletGenerator:
     Args:
 
     """
-    def __init__(self, aquifer, well):
+    def __init__(self, aquifer, well, timestep):
 
         self.aquifer = aquifer
         self.well = well
@@ -58,6 +61,7 @@ class DoubletGenerator:
         self.cps = aquifer.Cp_s #heat capacity limestone [J/kg K]
         self.g = aquifer.g # gravity constant
         self.time = 365*24*60*60 #1 year [s]
+        # self.time = timestep
         self.mdot = well.mdot
         self.lpipe = self.aquifer.d_top + 0.5 * self.aquifer.H
 
@@ -70,16 +74,19 @@ class DoubletGenerator:
         self.dx = self.Dx / self.Nx  # segment length of x
         self.dy = self.Dy / self.Ny  # segment length of y
         self.domain = np.array([self.dx, self.dy])
-        self.x_grid, self.y_grid = self._make_grid()
-        self.x_well, self.y_well = self._construct_well()
-        self.nodes_grid = self._make_nodes_grid()
-        self.coordinate_grid = self._make_coordinates_grid()
+        # self.x_grid, self.y_grid = self._make_grid()
+        # self.x_well, self.y_well = self._construct_well()
+        # self.nodes_grid = self._make_nodes_grid()
+        # self.coordinate_grid = self._make_coordinates_grid()
 
         self.P_pump = self._get_P_pump()
-        self.T_aquifer = self._get_T(self.lpipe)
-        self.P_aquifer = self._get_P(self.lpipe)
-        self.P_wellbore = self._get_P_wb()
-        self.T_wellbore = self.T_aquifer
+        self.T_aqproducer = self._get_T(self.lpipe)
+        self.P_aqproducer = self._get_P(self.lpipe, self.T_aqproducer)
+        self.P_aqinjector = self._get_P(self.lpipe, self.well.Ti_inj)
+        self.T_wellbore = self.T_aqproducer
+        self.P_wellproducer = self._get_P_wb(self.P_aqproducer, self.T_wellbore)
+        self.P_wellinjector = self._get_P_wb(self.P_aqinjector, self.well.Ti_inj)
+
 
         self.lpipe_divide = np.linspace(self.lpipe, 0, 200)
         self.q_heatloss_pipe = self._get_T_heatloss_pipe(self.well.D_in, self.lpipe_divide)
@@ -87,8 +94,8 @@ class DoubletGenerator:
         self.T_HE = self._get_T_HE(self.well.D_in, self.lpipe_divide)
         self.Power_HE = self.mdot * self.cp * (self.T_HE - self.well.Ti_inj)
 
-        self.P_grid = self._compute_P_grid()
-        self.T_grid = self._compute_T_grid()
+        # self.P_grid = self._compute_P_grid()
+        # self.T_grid = self._compute_T_grid()
 
     # def _get_gaussian_points
     def _compute_T_grid(self):
@@ -117,7 +124,7 @@ class DoubletGenerator:
         return P_pump
 
     def _get_P_HE(self, D_in):
-        P_HE = self.P_wellbore - self._get_P(self.aquifer.d_top + 0.5 * self.aquifer.H) -\
+        P_HE = self.P_wellproducer - self._get_P(self.aquifer.d_top + 0.5 * self.aquifer.H, self.T_aqproducer) -\
         ( self._get_f( D_in) * self.aquifer.rho_f * self.get_v_avg( D_in ) * (self.aquifer.d_top + 0.5 * self.aquifer.H) ) / 2 * D_in\
                + self.P_pump
 
@@ -157,7 +164,7 @@ class DoubletGenerator:
         Re = ( self.aquifer.rho_f * self.get_v_avg( D_in ) ) / self.aquifer.mu
         return Re
 
-    def _get_P_wb(self):
+    def _get_P_wb(self, P_aquifer, T_aquifer):
         """ Computes pressure at wellbore
 
         Arguments:
@@ -165,7 +172,12 @@ class DoubletGenerator:
         Returns:
         P_wb (float): value of pressure at well bore
         """
-        P_wb = self.P_aquifer + ( ( self.well.Q * self.aquifer.mu ) / ( 2 * math.pi * self.aquifer.K * self.aquifer.H ) ) * np.log ( self.well.L / self.well.r)
+        if P_aquifer == self.P_aqproducer:
+            Q = -self.well.Q
+        else:
+            Q = self.well.Q
+
+        P_wb = P_aquifer + ( ( Q * self.mu(T_aquifer, P_aquifer) ) / ( 2 * math.pi * self.aquifer.K * self.aquifer.H ) ) * np.log ( self.well.L / self.well.r)
         return P_wb
 
     def _get_T(self, d):
@@ -179,25 +191,36 @@ class DoubletGenerator:
         T = self.aquifer.T_surface + d * self.aquifer.labda
         return T
 
-    def _get_P(self, d):
-        """ Computes pressure of the aquifer as a function of the depth
+    def _get_P(self, d, T):
+        """ Computes pressure of the aquifer as a function of the depth, temperature and pressure
 
         Arguments:
         d (float): depth (downwards from groundlevel is positive)
         Returns:
-        T (float): value of temperature
+        P (float): value of pressure
         """
-        P_atm = 1e05
-        g = 9.81
-        P = P_atm + g * self.aquifer.rho_f * d
+        P_atm = 1e5
+        Pwater = P_atm + self.g * self.aquifer.rho_f * d                 # density as a constant
+        Pwater = P_atm + self.g * self.rho(T, Pwater) * d   # density as a function of temperature and pressure
+        print(Pwater, self.rho(self._get_T(d), Pwater))
 
-        return P
+        return Pwater
 
-    def rho(self, T, p):
-        rho = (1 + 10e-6 * (-80 * T - 3.3 * T**2 + 0.00175 * T**3 + 489 * p - 2 * T * p + 0.016 * T**2 * p - 1.3e-5 * T**3\
-                           * p - 0.333 * p**2 - 0.002 * T * p**2) )
+    def rho(self, Twater, Pwater):
+        # rho = (1 + 10e-6 * (-80 * T - 3.3 * T**2 + 0.00175 * T**3 + 489 * p - 2 * T * p + 0.016 * T**2 * p - 1.3e-5 * T**3\
+        #                    * p - 0.333 * p**2 - 0.002 * T * p**2) )
+        rho = PropsSI('D', 'T', Twater, 'P', Pwater, 'IF97::Water')
+        # rho = self.aquifer.rho_f * (1 - 3.17e-4 * (Twater - 298.15) - 2.56e-6 * (Twater - 298.15) ** 2)
 
         return rho
+
+    def mu(self, Twater, Pwater):
+        # mu = 0.1 + 0.333 * saltcontent + (1.65 + 91.9 * saltcontent**3) * math.exp(-(0.42*(saltcontent**0.8 - 0.17)**2 + 0.045) * Twater**0.8)
+        print(Twater)
+        mu = PropsSI('V', 'T', Twater, 'P', Pwater, 'IF97::Water')
+        print(mu)
+
+        return mu
 
     def _make_nodes_grid(self):
         """ Compute a nodes grid for the doublet
@@ -251,26 +274,29 @@ class DoubletGenerator:
 def PumpTest(doublet):
     print("\r\n############## Analytical values model ##############\n"
           "m_dot:           ", round(doublet.mdot), "Kg/s\n"
-          "P_aq,i/P_aq,p:   ", round(doublet.P_aquifer/1e5,2), "Bar\n"
-          "P_bh,i/P_bh,p:   ", round(doublet.P_wellbore/1e5,2), "Bar\n"
-          "T_bh,p:          ", doublet.T_wellbore, "Celcius\n"
+          "P_aq,i:          ", round(doublet.P_aqinjector/1e5,2), "Bar\n"
+          "P_aq,p:          ", round(doublet.P_aqproducer/1e5,2), "Bar\n"                                                     
+          "P_bh,i:          ", round(doublet.P_wellinjector/1e5,2), "Bar\n"
+          "P_bh,p:          ", round(doublet.P_wellproducer/1e5,2), "Bar\n"
+          "T_bh,p:          ", round(doublet.T_wellbore-273), "Celcius\n"
           "P_out,p/P_in,HE: ", round(doublet.P_HE/ 1e5,2), "Bar\n"
           "P_pump,p:        ", 0.5*doublet.P_pump/ 1e5, "Bar\n"
           "P_pump,i:        ", 0.5*doublet.P_pump/ 1e5, "Bar\n"
-          "T_out,p/T_in,HE: ", round(doublet.T_HE,2), "Celcius\n"
+          "T_out,p/T_in,HE: ", round(doublet.T_HE-273,2), "Celcius\n"
           "P_in,i/P_out,HE: ", round(doublet.P_HE/ 1e5,2), "Bar\n"
-          "T_in,i/T_out,HE: ", doublet.well.Ti_inj, "Celcius\n"
+          "T_in,i/T_out,HE: ", doublet.well.Ti_inj-273, "Celcius\n"
           "Power,HE:        ", round(doublet.Power_HE/1e6,2), "MW")
 
 ## Finite element thermo-hydraulic model
 
-def DoubletFlow(aquifer, well, doublet, k, epsilon):
+def DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime):
 
     # construct mesh
     nelemsX = 10
-    nelemsY = 5
+    nelemsY = 10
     vertsX = np.linspace(0, well.L, nelemsX + 1)
     vertsY = np.linspace(0, aquifer.H, nelemsY + 1)
+    vertsZ = np.linspace(0, aquifer.H, nelemsY + 1)
     topo, geom = mesh.rectilinear([vertsX, vertsY])
     # topo = topo.withboundary(inner='left', outer='right')
 
@@ -300,11 +326,12 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     ns.r = well.r
     ns.Awell = well.A_well
     ns.nyy = 0, 1
-    ns.pout = doublet.P_aquifer
+    ns.pout = doublet.P_aqproducer
+    ns.p0 = ns.pout
     ns.Tatm = 20 + 273
-    ns.Tin = doublet.well.Ti_inj + 273
-    ns.Tout = doublet.T_HE + 273
-    ns.T0 = doublet.T_HE + 273
+    ns.Tin = doublet.well.Ti_inj
+    ns.Tout = doublet.T_HE
+    ns.T0 = doublet.T_HE
     ns.ρf = aquifer.rho_f
     ns.ρ = ns.ρf #* (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)  #no lhsT in lhsp
     ns.lambdl = aquifer.labda_l #'thermal conductivity liquid [W/mK]'
@@ -313,24 +340,19 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     k_int_x = k #'intrinsic permeability [m2]'
     k_int_y = k #'intrinsic permeability [m2]'
     k_int= (k_int_x,k_int_y)
-    ns.k = ((aquifer.rho_f*aquifer.g)/aquifer.mu)*np.diag(k_int)
-    ns.u_i = 'k_ij (p_,j + (ρ g_1)_,j)' #darcy velocity
-    ns.u0 = (ns.mdot / (ns.ρ * ns.Awell)) * epsilon
-    ns.qf = ns.u0
+    ns.k = (1/aquifer.mu)*np.diag(k_int)
+    ns.u_i = '-k_ij (p_,j - (ρ g_1)_,j)' #darcy velocity
+    ns.u0 = (ns.mdot / (ns.ρ * ns.Awell))
+    ns.qf = -ns.u0
     ns.λ = epsilon * ns.lambdl + (1 - epsilon) * ns.lambds  # heat conductivity λ [W/m/K]
+    ns.epsilon = epsilon
+    ns.w = math.sin()
+    ns.Ar = aquifer.H * ns.w
 
-    # define custom nutils function
-    class MyFunc(function.Pointwise):
-        r = 0.2
-        x0 = 50
-        y0 = 14
-
-        @staticmethod
-        def evalf(x, y):
-            return np.heaviside((x - x0) ** 2 + (y - y0) ** 2 - r ** 2, 1)
-
-    # add to the namespace
-    # ns.myfunc = MyFunc(ns.x[0], ns.x[1])
+    # define initial condition for mass balance and darcy's law
+    sqr = topo.integral('(p - p0) (p - p0)' @ ns, degree=degree * 2) # set initial temperature to T=T0
+    pdofs0 = solver.optimize('lhsp', sqr)
+    statep0 = dict(lhsp=pdofs0)
 
     # define dirichlet constraints for hydraulic process
     sqrp = topo.boundary['right'].integral('(p - pout) (p - pout) d:x' @ ns, degree=degree * 2)       # set outflow condition to p=p_out
@@ -338,12 +360,13 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     # consp = dict(lhsp=consp)
 
     # formulate hydraulic process single field
-    resp = topo.integral('(u_i pbasis_n,i) d:x' @ ns, degree=degree*2) # formulation of darcy velocity
+    resp = topo.integral('(u_i epsilon pbasis_n,i) d:x' @ ns, degree=degree*2) # formulation of velocity
     resp -= topo.boundary['left'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) # set inflow boundary to q=u0
     resp += topo.boundary['top,bottom'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
+    pinertia = topo.integral('ρ pbasis_n,i u_i epsilon d:x' @ ns, degree=degree*4)
 
     # solve for transient state of pressure
-    lhsp = solver.solve_linear('lhsp', resp, constrain=consp)
+    # lhsp = solver.solve_linear('lhsp', resp, constrain=consp)
 
     # introduce temperature dependent variables
     ns.ρ = ns.ρf * (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)
@@ -368,23 +391,23 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
     # resT -= topo.integral('Tbasis_n qh d:x' @ ns, degree=degree*2)  # heat source/sink term within domain
     Tinertia = topo.integral('ρ cf Tbasis_n T d:x' @ ns, degree=degree*4)
 
-    # time
-    timestep = 1
-    endtime = 60
-
     def make_plots():
         fig, ax = plt.subplots(2)
 
         ax[0].set(xlabel='X [m]', ylabel='Pressure [Bar]')
-        ax[0].plot(x[:,0].take(bezier.tri.T, 0), p.take(bezier.tri.T, 0))
+        ax[0].set_ylim([min(p/1e5), doublet.P_aqproducer/1e5])
+        # ax[0].set_xlim([0, 1000])
+        print("wellbore pressure", p[0])
+        print("pressure difference", p[0] - doublet.P_aqproducer)
+        ax[0].plot(x[:, 0].take(bezier.tri.T, 0), (p/1e5).take(bezier.tri.T, 0))
 
-        ax[1].set(xlabel='X [m]', ylabel='Temperature [Celcius]')
-        ax[1].plot(x[:,0].take(bezier.tri.T, 0), T.take(bezier.tri.T, 0)-273)
+        # ax[1].set(xlabel='X [m]', ylabel='Temperature [Celcius]')
+        # ax[1].plot(x[:,0].take(bezier.tri.T, 0), T.take(bezier.tri.T, 0)-273)
 
         fig, axs = plt.subplots(3, sharex=True, sharey=True)
         fig.suptitle('2D Aquifer')
 
-        plot0 = axs[0].tripcolor(x[:, 0], x[:, 1], bezier.tri, p / 1e5, shading='gouraud', rasterized=True)
+        plot0 = axs[0].tripcolor(x[:, 0], x[:, 1], bezier.tri, p / 1e5, vmin=min(p/1e5), vmax=doublet.P_aqproducer/1e5, shading='gouraud', rasterized=True)
         fig.colorbar(plot0, ax=axs[0], label="Darcy p [Bar]")
 
         plot1 = axs[1].tripcolor(x[:, 0], x[:, 1], bezier.tri, u[:, 0], vmin=0, vmax=0.05, shading='gouraud',
@@ -393,29 +416,50 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
         plt.xlabel('x')
         plt.ylabel('z')
 
-        plot2 = axs[2].tripcolor(x[:, 0], x[:, 1], bezier.tri, T-273, shading='gouraud', rasterized=True)
-        fig.colorbar(plot2, ax=axs[2], label="T [C]")
+        # plot2 = axs[2].tripcolor(x[:, 0], x[:, 1], bezier.tri, T-273, shading='gouraud', rasterized=True)
+        # fig.colorbar(plot2, ax=axs[2], label="T [C]")
 
         plt.show()
 
-    # Time dependent heat transport process
+        # Time dependent pressure development
+
     bezier = topo.sample('bezier', 5)
     with treelog.iter.plain(
-            'timestep', solver.impliciteuler(('lhsT'), residual=resT, inertia=Tinertia,
-             arguments=dict(lhsp=lhsp, lhsT=Tdofs0), timestep=timestep, constrain=consT,
-             newtontol=1e-2)) as steps:
+            'timestep', solver.impliciteuler(('lhsp'), residual=resp, inertia=pinertia,
+                                             arguments=statep0, timestep=timestep, constrain=consp,
+                                             newtontol=1e-2)) as steps:
+                                            #arguments=dict(lhsp=lhsp, lhsT=Tdofs0)
 
-        for istep, lhsT in enumerate(steps):
+        for istep, lhsp in enumerate(steps):
 
             time = istep * timestep
             # x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
-            x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
+            x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhsp=lhsp)
 
             if time >= endtime:
-                print(x[:,0], T)
+                print(len(x[:, 0]), len(p))
 
                 make_plots()
                 break
+
+    # # Time dependent heat transport process
+    # bezier = topo.sample('bezier', 5)
+    # with treelog.iter.plain(
+    #         'timestep', solver.impliciteuler(('lhsT'), residual=resT, inertia=Tinertia,
+    #          arguments=dict(lhsp=lhsp, lhsT=Tdofs0), timestep=timestep, constrain=consT,
+    #          newtontol=1e-2)) as steps:
+    #
+    #     for istep, lhsT in enumerate(steps):
+    #
+    #         time = istep * timestep
+    #         # x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
+    #         x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
+    #
+    #         if time >= endtime:
+    #             print(len(x[:,0]), len(T))
+    #
+    #             make_plots()
+    #             break
 
     bar = 1e5
     p_inlet = p[0]/bar
@@ -442,9 +486,6 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon):
                 # axs[2].annotate(T[index], xy=(i, j))
 
     # add_value_to_plot()
-
-    print("temperature", eval("ns.T").shape, len(T))
-
     # fig, ax = plt.subplots(4)
     # density = 'True'
     #
