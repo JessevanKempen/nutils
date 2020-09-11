@@ -32,12 +32,12 @@ def generate_txt( filename):
         'porosity': 0.2,
         'permeability': 9e-10,
         'rho_f': 996.9,
-        'rho_s': 2400, #2711
-        'viscosity': 8.9e-4,
+        'rho_s': 2400,
+        'viscosity': 0.0003142,
         'K': 4e-13,
         'Cp_f' : 4183,
-        'Cp_s' : 870, #910
-        'labda_s' : 4.2, #was 1.9
+        'Cp_s' : 870,
+        'labda_s' : 4.2,
         'labda_l': 0.663,
         'saltcontent': 0.155, # [kg/l]
         'g' : 9.81
@@ -48,7 +48,7 @@ def generate_txt( filename):
         'Q': 250/3600,
         'L': 1000,
         'Ti_inj': 30+273,
-        'epsilon': 0.046,
+        'porosity': 0.046,
     })
 
     with open(filename, 'w') as outfile:

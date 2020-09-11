@@ -341,7 +341,9 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime):
     k_int_y = k #'intrinsic permeability [m2]'
     k_int= (k_int_x,k_int_y)
     ns.k = (1/aquifer.mu)*np.diag(k_int)
+    ns.k1 = k
     ns.u_i = '-k_ij (p_,j - (ρ g_1)_,j)' #darcy velocity
+    ns.ur = '-k1 (p_,i)' #darcy velocity, but now simple
     ns.u0 = (ns.mdot / (ns.ρ * ns.Awell))
     ns.qf = -ns.u0
     ns.λ = epsilon * ns.lambdl + (1 - epsilon) * ns.lambds  # heat conductivity λ [W/m/K]

@@ -1,12 +1,14 @@
-from nutils import mesh, function, solver, export, cli, topology
+from nutils import mesh, function, solver, export, cli, topology, sparse
 import numpy as np, treelog
+from matplotlib import collections
+import matplotlib.pyplot as plt
 import math
 import vtk
+import scipy.special as sc
 
 from myIOlib import *
 import matplotlib.tri as tri
 
-#################### Core #########################
 # Generate text file for parameters
 generate_txt( "parameters.txt" )
 
@@ -14,26 +16,26 @@ generate_txt( "parameters.txt" )
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
 
+# Assign class
 class Aquifer:
 
     def __init__(self, aquifer):
 
-        self.d_top = aquifer['d_top'] # depth top aquifer at production well
-        self.labda = aquifer['labda']  # geothermal gradient
-        self.H = np.random.uniform(low=55, high=140) #aquifer['H']  # thickness aquifer
-        print("thickness", self.H)
+        self.d_top = aquifer['d_top']       # depth top aquifer at production well
+        self.labda = aquifer['labda']       # geothermal gradient
+        self.H = aquifer['H']
         self.T_surface = aquifer['T_surface']
         self.porosity = aquifer['porosity']
         self.rho_f = aquifer['rho_f']
         self.rho_s = aquifer['rho_s']
         self.mu = aquifer['viscosity']
         self.K = aquifer['K']
-        self.Cp_f = aquifer['Cp_f'] # water heat capacity
-        self.Cp_s = aquifer['Cp_s'] #heat capacity limestone [J/kg K]
-        self.labda_s = aquifer['labda_s'] # thermal conductivity solid [W/mK]
-        self.labda_l = aquifer['labda_l'] # thermal conductivity solid [W/mK]
-        self.saltcontent = aquifer['saltcontent'] # [kg/l]
-        self.g = 9.81 # gravity constant
+        self.Cp_f = aquifer['Cp_f']         # heat capacity fluid [J/kg K]
+        self.Cp_s = aquifer['Cp_s']         # heat capacity strata [J/kg K]
+        self.labda_s = aquifer['labda_s']   # thermal conductivity solid [W/mK]
+        self.labda_l = aquifer['labda_l']   # thermal conductivity liquid [W/mK]
+        self.saltcontent = aquifer['saltcontent']
+        self.g = 9.81
 
 class Well:
 
@@ -43,128 +45,186 @@ class Well:
                 self.Q = well['Q']  # pumping rate from well (negative value = extraction)
                 self.L = well['L']  # distance between injection well and production well
                 self.Ti_inj = well['Ti_inj']  # initial temperature of injection well (reinjection temperature)
-                self.epsilon = well['epsilon']
-                self.D_in = 2 * self.r
+                self.porosity = well['porosity']
                 self.mdot = self.Q * aquifer['rho_f']
-                self.A_well = np.pi * 2 * self.r
+                self.D_in = 2 * self.r
+                self.A_well =  2 * np.pi * self.r
 
-def make_plots(x, p, u):
-    fig, ax = plt.subplots(2)
-
-    ax[0].set(xlabel='X [m]', ylabel='Pressure [Bar]')
-    ax[0].set_ylim([min(p/1e5), max(p/1e5)/1e5])
-    # ax[0].set_xlim([0, 1000])
-    print("wellbore pressure", p[0])
-    print("pressure difference", min(p/1e5), max(p/1e5)/1e5)
-    ax[0].plot(x[:, 0].take(bezier.tri.T, 0), (p/1e5).take(bezier.tri.T, 0))
-
-    plt.show()
-
-# Construct the objects of for the model
+# Construct the objects for the model
 print("Constructing the FE model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
 
-def main(degree:int, timestep:float, maxradius:float, endtime:float):
+def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
     '''
     Fluid flow in porous media.
 
     .. arguments::
 
-       degree [3]
+       degree [2]
          Polynomial degree for pressure space.
-       timestep [1]
+       btype [spline]
+         Type of basis function (std/spline)
+       timestep [30]
          Time step.
-       maxradius [50]
+       maxradius [1000]
          Target exterior radius of influence.
-       endtime [2]
+       endtime [360]
          Stopping time.
     '''
+
+    N = round((endtime / timestep) + 1)
+    timeperiod = timestep * np.linspace(1, N, N)
 
     rw = 1
     rmax = maxradius
     H = 100
-    φ = aquifer.porosity
-    k = aquifer.K
+
+    rverts = np.linspace(rw, rmax, 41)
+    θverts = [0, 2 * np.pi]
+    zverts = np.linspace(0, H, 10)
+
+    topo0, geom = mesh.rectilinear(
+        [rverts, zverts, θverts], periodic=[2])
+    topo = topo0
+    topo = topo.withboundary(
+        inner=topo.boundary['left'], outer=topo.boundary['right'])
+    topo = topo.withboundary(
+        strata=topo.boundary-topo.boundary['inner,outer'])
+    assert (topo.boundary['inner'].sample('bezier', 2).eval(geom[0]) == rw).all(), "Invalid inner boundary condition"
+    assert (topo.boundary['outer'].sample('bezier', 2).eval(geom[0]) == rmax).all(), "Invalid outer boundary condition"
+
+    omega = function.Namespace()
+    omega.r, omega.z, omega.θ = geom
+    omega.x_i = '<r cos(θ), z, r sin(θ)>_i'
+    omega.pbasis = topo.basis(btype, degree=degree)
+    omega.p = 'pbasis_n ?lhsp_n'
+
+    omega.pi = 200e5
+    omega.cf = 4200 #aquifer.Cp_f [J/kg K]
+    omega.ρf = 1000 #aquifer.rho_f
+    omega.ρs = 2400 #aquifer.rho_s
+    omega.λf = 0.663 #aquifer.labda_l
+    omega.λs = 4.2 #aquifer.labda_s
+    omega.g = 9.81 #aquifer.g
+    omega.g_j = '<0, g, 0>_j'
+    omega.H = H
+    omega.rw = rw
+    omega.mu = 1.3e-3 #aquifer.mu
+    omega.φ = 0.2 #aquifer.porosity
+    k_int_x = 4e-13 #aquifer.K
+    k_int = (k_int_x, 0, 0)
+    omega.k = (1/omega.mu)*np.diag(k_int)
+    omega.Q = -0.07 #well.Q
+    # omega.Qw = '2 pi ρf k_00 x_0 (p_,0)'
+    omega.Qw = 'ρf Q / (2 pi rw H)'
+    omega.λ = omega.φ * omega.λf + (1 - omega.φ) * omega.λs
+    omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
+    omega.q_i = '-k_ij (p_,j)' # - ρf g_j
+    omega.u_i = 'q_i φ'
     c_φ = 1e-8
     c_f = 5e-10
+    omega.ct = c_φ + c_f
+    # omega.pexact = 'scale (x_i ((k + 1) (0.5 + R2) + (1 - R2) R2 (x_0^2 - 3 x_1^2) / r2) - 2 δ_i1 x_1 (1 + (k - 1 + R2) R2))'
 
-    rverts = np.linspace(rw, rmax, 6)
-    θverts = np.linspace(0, 0.5*np.pi, 3)
-    zverts = np.linspace(0, H, 10)
-    topo, geom = mesh.rectilinear([rverts, zverts, θverts], periodic=[2])
-    topo = topo.withboundary(inner='left', outer='right', strata='top,bottom')
-
-    ns = function.Namespace()
-    ns.r, ns.z, ns.θ = geom
-    ns.x_i = '<r cos(θ), z, r sin(θ)>_i'
-    ns.pbasis = topo.basis('std', degree=degree)
-    ns.p = 'pbasis_n ?lhsp_n'
-
-    ns.pi = 223e5
-    ns.cf = aquifer.Cp_f
-    ns.ρf = aquifer.rho_f
-    ns.ρs = aquifer.rho_s
-    ns.λf = aquifer.labda_l
-    ns.λs = aquifer.labda_s
-    ns.g = aquifer.g
-    ns.φ = φ
-    k_int_x = k
-    k_int_y = k
-    k_int_z = k
-    k_int = (k_int_x, k_int_y, k_int_z)
-    ns.k = (1/aquifer.mu)*np.diag(k_int)
-    ns.qf = well.Q # uniform outflow
-    ns.λ = ns.φ * ns.λf + (1 - ns.φ) * ns.λs
-    ns.ρ = ns.φ * ns.ρf + (1 - ns.φ) * ns.ρs
-    ns.u_i = '-k_ij (p_,j - (ρf g)_,j)'
-    ns.ct = c_φ + c_f
+    omega.ei = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * omega.k[00][0] * 1)).eval())
+    print(omega.ei.eval().shape)
+    omega.pexact = '- Q ei_0 / (4 pi k_00 H) '
+    # omega.dp = 'p - pexact'
 
     # define initial state
-    sqr = topo.integral('(p - pi) (p - pi)' @ ns, degree=degree * 2) # set initial pressure p(x,y,z,0) = pi
-    pdofs0 = solver.optimize('lhsp', sqr)
+    sqr = topo.integral('(p - pi) (p - pi)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = pi
+    pdofs0 = solver.optimize('lhsp', sqr, droptol=1e-15)
     statep0 = dict(lhsp=pdofs0)
 
     # define dirichlet constraints
-    sqrp = topo.boundary['right'].integral('(p - pi) (p - pi) d:x' @ ns, degree=degree * 2) # set outer condition to p(rmax,y,z,t) = pi
+    sqrp = topo.boundary['outer'].integral('(p - pi) (p - pi) d:x' @ omega, degree=degree*2) # set outer condition to p(rmax,y,z,t) = pi
+    # sqrp += topo.boundary['inner'].integral('(u_i - Qw n_i) (u_i - Qw n_i) d:x' @ omega, degree=degree*2)
     consp = solver.optimize('lhsp', sqrp, droptol=1e-15)
-    # consp = dict(lhsp=consp)
+    consp = dict(lhsp=consp)
 
     # formulate hydraulic process single field
-    resp = topo.integral('(u_i φ pbasis_n,i) d:x' @ ns, degree=degree*2) # formulation of velocity
-    resp -= topo.boundary['inner'].integral('pbasis_n qf d:x' @ ns, degree=degree*2) # set inflow boundary to q=u0
-    # resp += topo.boundary['strata'].integral('(pbasis_n u_i n_i) d:x' @ ns, degree=degree*2) #neumann condition
-    pinertia = topo.integral('ρ φ ct p pbasis_n d:x' @ ns, degree=degree*4)
+    resp = topo.integral('(pbasis_n,i ρf u_i) d:x' @ omega, degree=degree*2)
+    resp += topo.boundary['strata'].integral('(pbasis_n ρf u_i n_i) d:x' @ omega, degree=degree*2)
+    resp -= topo.boundary['inner'].integral('pbasis_n Qw d:x' @ omega, degree=degree*2)
+    pinertia = topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
 
-    bezier = topo.sample('bezier', 9)
+    # lhsp0 = solver.solve_linear('lhsp', resp, constrain=statep0)
+    # lhsp0 = dict(lhsp=lhsp0)
+    # lhsp1 = solver.solve_linear('lhsp', resp, constrain=consp)
+
+    plottopo = topo[:, :, 0:].boundary['back']
+
+    bezier = plottopo.sample('bezier', 9)
     with treelog.iter.plain(
             'timestep', solver.impliciteuler(('lhsp'), residual=resp, inertia=pinertia,
                                              arguments=statep0, timestep=timestep, constrain=consp,
                                              newtontol=1e-2)) as steps:
 
-        for istep, lhsp in enumerate(steps):
+        pwell = np.empty([N])
+        pex = np.empty([N])
 
+        for istep, lhsp in enumerate(steps):
             time = istep * timestep
-            x, p, u = bezier.eval(['x_i', 'p', 'u_i'] @ ns, lhsp=lhsp)
+
+            x, r, z, p, u, pi, pexact = bezier.eval([omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.pi, omega.pexact], lhsp=lhsp)
+
+            pwell[istep] = p[0]
+            pex[istep] = pexact[0]
+
+            print("exact well pressure difference", pexact[0])
+            print("well pressure difference", p[0] - pi[0])
+
+            with export.mplfigure('pressure.png', dpi=800) as fig:
+                ax = fig.add_subplot(111, title='pressure', aspect=1)
+                ax.autoscale(enable=True, axis='both', tight=True)
+                im = ax.tripcolor(r, z, bezier.tri, p, shading='gouraud', cmap='jet')
+                ax.add_collection(
+                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                               alpha=0.2))
+                fig.colorbar(im)
+
+            with export.mplfigure('pressure1d.png', dpi=800) as plt:
+                ax = plt.subplots()
+                # fig, ax = plt.subplots()
+                ax.set(xlabel='Distance [m]', ylabel='Pressure [Pa]')
+                # print('r', np.array(r.take(bezier.tri.T, 0)[1]))
+                # print('p', np.array(p.take(bezier.tri.T, 0)[1]))
+                # ax.plot(np.array(r.take(bezier.tri.T, 0)[0]), np.array(p.take(bezier.tri.T, 0)[1]))
+                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
+                # ax.plot(np.array(r), np.array(p))
+                # plt.show()
+
+            uniform = plottopo.sample('uniform', 1)
+            r_, z_, uv = uniform.eval([omega.r, omega.z, omega.u], lhsp=lhsp)
+
+            # print("velocity source", omega.Qw.eval())
+            # print("r direction", x[:,0])
+            # print(uv[:, 0], uv[:, 1])
+
+            with export.mplfigure('velocity.png', dpi=800) as fig:
+                ax = fig.add_subplot(111, title='Velocity', aspect=1)
+                ax.autoscale(enable=True, axis='both', tight=True)
+                im = ax.tripcolor(r, z, bezier.tri, u, shading='gouraud', cmap='jet')
+                ax.quiver(r_, z_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
+                fig.colorbar(im)
 
             if time >= endtime:
-                with export.mplfigure('pressure.png', dpi=800) as fig:
-                    ax = fig.add_subplot(111, title='pressure', aspect=1)
-                    ax.autoscale(enable=True, axis='both', tight=True)
-                    triang = tri.Triangulation(x[:, 0], x[:, 2])
-                    im = ax.tripcolor(triang, p, shading='flat')
-                    # ax.add_collection(
-                    #     collections.LineCollection(numpy.array([x[:,0], x[:,1]]).T[bezier.hull], colors='k', linewidths=0.2,
-                    #                                alpha=0.2))
-                    fig.colorbar(im)
 
-                export.vtk('aquifer', bezier.tri, bezier.eval(ns.x))
-                # export.vtk('drawdown test', bezier.tri, bezier.eval(ns.p))
+                with export.mplfigure('pressuretime.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    # fig, ax = plt.subplots()
+                    ax.set(xlabel='Time [s]', ylabel='Pressure [Pa]')
+                    ax.plot(timeperiod, pwell, 'bo')
+                    ax.plot(timeperiod, pi[0] - pex)
+                    # ax.plot(np.array(r), np.array(p))
+                    # plt.show()
 
+                # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
                 break
+
         return
     return
-
 
 if __name__ == '__main__':
     cli.run(main)
