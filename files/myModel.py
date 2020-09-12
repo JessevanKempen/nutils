@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import math
 import vtk
 import scipy.special as sc
+import matplotlib.tri as tri
 
 from myIOlib import *
-import matplotlib.tri as tri
 
 # Generate text file for parameters
 generate_txt( "parameters.txt" )
@@ -16,7 +16,7 @@ generate_txt( "parameters.txt" )
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
 
-# Assign class
+# Assign variables into classes
 class Aquifer:
 
     def __init__(self, aquifer):
@@ -55,38 +55,54 @@ print("Constructing the FE model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
 
+def RefineBySDF(topo, sdf, nrefine):
+    refined_topo = topo
+    for n in range(nrefine):
+        elems_to_refine = []
+        k = 0
+        bez = refined_topo.sample('bezier',2)
+        sd = bez.eval(sdf)
+        sd = sd.reshape( [len(sd)//4, 4] )
+        for i in range(len(sd)):
+            if any(np.sign(sdval) != np.sign(sd[i][0]) for sdval in sd[i,:]):
+                elems_to_refine.append(k)
+            k = k + 1
+        refined_topo = refined_topo.refined_by(refined_topo.transforms[np.array(elems_to_refine)])
+    return refined_topo
+
 def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
     '''
     Fluid flow in porous media.
 
     .. arguments::
 
-       degree [2]
+       degree [1]
          Polynomial degree for pressure space.
        btype [spline]
          Type of basis function (std/spline)
-       timestep [30]
+       timestep [1]
          Time step.
-       maxradius [1000]
+       maxradius [100]
          Target exterior radius of influence.
-       endtime [360]
+       endtime [60]
          Stopping time.
     '''
 
-    N = round((endtime / timestep) + 1)
+    N = round((endtime / timestep)+1)
     timeperiod = timestep * np.linspace(1, N, N)
 
     rw = 1
     rmax = maxradius
     H = 100
 
-    rverts = np.linspace(rw, rmax, 41)
+    rverts = np.linspace(rw, rmax, 31)
     θverts = [0, 2 * np.pi]
     zverts = np.linspace(0, H, 10)
 
-    topo0, geom = mesh.rectilinear(
-        [rverts, zverts, θverts], periodic=[2])
-    topo = topo0
+    # topo, geom = mesh.rectilinear(
+    #     [rverts, zverts, θverts], periodic=[2])
+    topo, geom = mesh.rectilinear(
+        [rverts, zverts])
     topo = topo.withboundary(
         inner=topo.boundary['left'], outer=topo.boundary['right'])
     topo = topo.withboundary(
@@ -95,29 +111,34 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
     assert (topo.boundary['outer'].sample('bezier', 2).eval(geom[0]) == rmax).all(), "Invalid outer boundary condition"
 
     omega = function.Namespace()
-    omega.r, omega.z, omega.θ = geom
-    omega.x_i = '<r cos(θ), z, r sin(θ)>_i'
-    omega.pbasis = topo.basis(btype, degree=degree)
+
+    # omega.r, omega.z, omega.θ = geom
+    omega.r, omega.z = geom
+    # omega.x_i = '<r cos(θ), z, r sin(θ)>_i'
+    omega.x_i = '<r, z>_i'
+    omega.pbasis = topo.basis(btype, degree=degree, continuity=0)
     omega.p = 'pbasis_n ?lhsp_n'
 
-    omega.pi = 200e5
+    omega.p0 = 200e5
+    omega.pi = math.pi
     omega.cf = 4200 #aquifer.Cp_f [J/kg K]
     omega.ρf = 1000 #aquifer.rho_f
     omega.ρs = 2400 #aquifer.rho_s
     omega.λf = 0.663 #aquifer.labda_l
     omega.λs = 4.2 #aquifer.labda_s
     omega.g = 9.81 #aquifer.g
-    omega.g_j = '<0, g, 0>_j'
+    omega.g_j = '<0, -g>_j'
     omega.H = H
     omega.rw = rw
     omega.mu = 1.3e-3 #aquifer.mu
     omega.φ = 0.2 #aquifer.porosity
     k_int_x = 4e-13 #aquifer.K
-    k_int = (k_int_x, 0, 0)
+    k_int = (k_int_x, 0)
     omega.k = (1/omega.mu)*np.diag(k_int)
-    omega.Q = -0.07 #well.Q
-    # omega.Qw = '2 pi ρf k_00 x_0 (p_,0)'
-    omega.Qw = 'ρf Q / (2 pi rw H)'
+    Aw = 2 * math.pi * rw
+    omega.Q = -0.1
+    omega.ur = omega.Q / Aw
+    omega.Qw = 'ρf Q / (2 pi k_00 H)'
     omega.λ = omega.φ * omega.λf + (1 - omega.φ) * omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.q_i = '-k_ij (p_,j)' # - ρf g_j
@@ -125,55 +146,52 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
     c_φ = 1e-8
     c_f = 5e-10
     omega.ct = c_φ + c_f
-    # omega.pexact = 'scale (x_i ((k + 1) (0.5 + R2) + (1 - R2) R2 (x_0^2 - 3 x_1^2) / r2) - 2 δ_i1 x_1 (1 + (k - 1 + R2) R2))'
 
-    omega.ei = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * omega.k[00][0] * 1)).eval())
-    print(omega.ei.eval().shape)
-    omega.pexact = '- Q ei_0 / (4 pi k_00 H) '
-    # omega.dp = 'p - pexact'
+    omega.ei = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * math.pi * omega.k[0][0] * timeperiod)).eval())
+    omega.pexact = -omega.Q * omega.ei / (4 * omega.pi * omega.k[0][0] * omega.H)
 
     # define initial state
-    sqr = topo.integral('(p - pi) (p - pi)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = pi
+    sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
     pdofs0 = solver.optimize('lhsp', sqr, droptol=1e-15)
     statep0 = dict(lhsp=pdofs0)
 
     # define dirichlet constraints
-    sqrp = topo.boundary['outer'].integral('(p - pi) (p - pi) d:x' @ omega, degree=degree*2) # set outer condition to p(rmax,y,z,t) = pi
-    # sqrp += topo.boundary['inner'].integral('(u_i - Qw n_i) (u_i - Qw n_i) d:x' @ omega, degree=degree*2)
+    sqrp = topo.boundary['outer'].integral('(p - p0) (p - p0) d:x' @ omega, degree=degree*2) # set outer condition to p(rmax,y,z,t) = p0
     consp = solver.optimize('lhsp', sqrp, droptol=1e-15)
     consp = dict(lhsp=consp)
 
     # formulate hydraulic process single field
-    resp = topo.integral('(pbasis_n,i ρf u_i) d:x' @ omega, degree=degree*2)
-    resp += topo.boundary['strata'].integral('(pbasis_n ρf u_i n_i) d:x' @ omega, degree=degree*2)
-    resp -= topo.boundary['inner'].integral('pbasis_n Qw d:x' @ omega, degree=degree*2)
+    resp = topo.integral('(pbasis_n,i ρf u_i) d:x' @ omega, degree=degree*4)
+    resp += topo.boundary['strata'].integral('(pbasis_n ρf u_i n_i) d:x' @ omega, degree=degree*4)
+    resp -= topo.boundary['inner'].integral('pbasis_n Q d:x' @ omega, degree=degree*4)
     pinertia = topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
 
-    # lhsp0 = solver.solve_linear('lhsp', resp, constrain=statep0)
-    # lhsp0 = dict(lhsp=lhsp0)
-    # lhsp1 = solver.solve_linear('lhsp', resp, constrain=consp)
+    # plottopo = topo[:, :, 0:].boundary['back']
 
-    plottopo = topo[:, :, 0:].boundary['back']
+    # locally refine around inner boundary
+    nref = 2
+    print(np.array(geom[0]))
+    refined_topo = RefineBySDF(topo, geom[0], nref)
 
-    bezier = plottopo.sample('bezier', 9)
+    # bezier = plottopo.sample('bezier', 9)
+    bezier = refined_topo.sample('bezier', 9)
     with treelog.iter.plain(
             'timestep', solver.impliciteuler(('lhsp'), residual=resp, inertia=pinertia,
                                              arguments=statep0, timestep=timestep, constrain=consp,
-                                             newtontol=1e-2)) as steps:
+                                             newtontol=0.3)) as steps:
 
         pwell = np.empty([N])
-        pex = np.empty([N])
 
         for istep, lhsp in enumerate(steps):
             time = istep * timestep
 
-            x, r, z, p, u, pi, pexact = bezier.eval([omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.pi, omega.pexact], lhsp=lhsp)
+            x, r, z, p, u, p0 = bezier.eval([omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp)
+            pex = omega.pexact.eval().reshape(-1)
 
             pwell[istep] = p[0]
-            pex[istep] = pexact[0]
 
-            print("exact well pressure difference", pexact[0])
-            print("well pressure difference", p[0] - pi[0])
+            print("exact well pressure difference", pex[istep])
+            print("well pressure difference", p[0] - p0[0])
 
             with export.mplfigure('pressure.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -186,21 +204,12 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
 
             with export.mplfigure('pressure1d.png', dpi=800) as plt:
                 ax = plt.subplots()
-                # fig, ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Pressure [Pa]')
-                # print('r', np.array(r.take(bezier.tri.T, 0)[1]))
-                # print('p', np.array(p.take(bezier.tri.T, 0)[1]))
-                # ax.plot(np.array(r.take(bezier.tri.T, 0)[0]), np.array(p.take(bezier.tri.T, 0)[1]))
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
+                ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1])/1e6)
                 # ax.plot(np.array(r), np.array(p))
-                # plt.show()
 
             uniform = plottopo.sample('uniform', 1)
             r_, z_, uv = uniform.eval([omega.r, omega.z, omega.u], lhsp=lhsp)
-
-            # print("velocity source", omega.Qw.eval())
-            # print("r direction", x[:,0])
-            # print(uv[:, 0], uv[:, 1])
 
             with export.mplfigure('velocity.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='Velocity', aspect=1)
@@ -213,12 +222,9 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
 
                 with export.mplfigure('pressuretime.png', dpi=800) as plt:
                     ax = plt.subplots()
-                    # fig, ax = plt.subplots()
-                    ax.set(xlabel='Time [s]', ylabel='Pressure [Pa]')
-                    ax.plot(timeperiod, pwell, 'bo')
-                    ax.plot(timeperiod, pi[0] - pex)
-                    # ax.plot(np.array(r), np.array(p))
-                    # plt.show()
+                    ax.set(xlabel='Time [s]', ylabel='Pressure [MPa]')
+                    ax.plot(timeperiod, pwell/1e6, 'bo')
+                    ax.plot(timeperiod, (p0[0] + pex)/1e6)
 
                 # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
                 break
