@@ -64,9 +64,11 @@ def RefineBySDF(topo, sdf, nrefine):
         sd = bez.eval(sdf)
         sd = sd.reshape( [len(sd)//4, 4] )
         for i in range(len(sd)):
+            # print(sd[i,:])
             if any(np.sign(sdval) != np.sign(sd[i][0]) for sdval in sd[i,:]):
                 elems_to_refine.append(k)
             k = k + 1
+        # print(elems_to_refine)
         refined_topo = refined_topo.refined_by(refined_topo.transforms[np.array(elems_to_refine)])
     return refined_topo
 
@@ -76,33 +78,39 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
 
     .. arguments::
 
-       degree [1]
+       degree [2]
          Polynomial degree for pressure space.
        btype [spline]
          Type of basis function (std/spline)
-       timestep [1]
+       timestep [10]
          Time step.
        maxradius [100]
          Target exterior radius of influence.
-       endtime [60]
+       endtime [1800]
          Stopping time.
     '''
 
-    N = round((endtime / timestep)+1)
-    timeperiod = timestep * np.linspace(1, N, N)
+# degree = 1
+# btype = "spline"
+# timestep = 1
+# maxradius = 100
+# endtime = 60
 
-    rw = 1
+    N = round((endtime / timestep)+1)
+    timeperiod = timestep * np.linspace(0, N, N)
+
+    rw = 0.1
     rmax = maxradius
     H = 100
 
-    rverts = np.linspace(rw, rmax, 31)
+    rverts = np.linspace(rw, rmax, 21)
     θverts = [0, 2 * np.pi]
     zverts = np.linspace(0, H, 10)
 
-    # topo, geom = mesh.rectilinear(
-    #     [rverts, zverts, θverts], periodic=[2])
     topo, geom = mesh.rectilinear(
-        [rverts, zverts])
+        [rverts, zverts, θverts], periodic=[2])
+    # topo, geom = mesh.rectilinear(
+    #     [rverts, zverts])
     topo = topo.withboundary(
         inner=topo.boundary['left'], outer=topo.boundary['right'])
     topo = topo.withboundary(
@@ -112,10 +120,10 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
 
     omega = function.Namespace()
 
-    # omega.r, omega.z, omega.θ = geom
-    omega.r, omega.z = geom
-    # omega.x_i = '<r cos(θ), z, r sin(θ)>_i'
-    omega.x_i = '<r, z>_i'
+    omega.r, omega.z, omega.θ = geom
+    # omega.r, omega.z = geom
+    omega.x_i = '<r cos(θ), z, r sin(θ)>_i'
+    # omega.x_i = '<r, z>_i'
     omega.pbasis = topo.basis(btype, degree=degree, continuity=0)
     omega.p = 'pbasis_n ?lhsp_n'
 
@@ -127,18 +135,18 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
     omega.λf = 0.663 #aquifer.labda_l
     omega.λs = 4.2 #aquifer.labda_s
     omega.g = 9.81 #aquifer.g
-    omega.g_j = '<0, -g>_j'
+    omega.g_j = '<0, -g, 0>_j'
     omega.H = H
     omega.rw = rw
     omega.mu = 1.3e-3 #aquifer.mu
     omega.φ = 0.2 #aquifer.porosity
     k_int_x = 4e-13 #aquifer.K
-    k_int = (k_int_x, 0)
+    k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = (1/omega.mu)*np.diag(k_int)
-    Aw = 2 * math.pi * rw
-    omega.Q = -0.1
-    omega.ur = omega.Q / Aw
-    omega.Qw = 'ρf Q / (2 pi k_00 H)'
+    Aw = 2 * math.pi * rw * H
+    omega.Q = -0.01
+    omega.Vw = math.pi * rw**2 * H
+    omega.Qw = omega.Q * rw / 2
     omega.λ = omega.φ * omega.λf + (1 - omega.φ) * omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.q_i = '-k_ij (p_,j)' # - ρf g_j
@@ -163,22 +171,29 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
     # formulate hydraulic process single field
     resp = topo.integral('(pbasis_n,i ρf u_i) d:x' @ omega, degree=degree*4)
     resp += topo.boundary['strata'].integral('(pbasis_n ρf u_i n_i) d:x' @ omega, degree=degree*4)
-    resp -= topo.boundary['inner'].integral('pbasis_n Q d:x' @ omega, degree=degree*4)
-    pinertia = topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
+    resp += topo.boundary['inner'].integral('pbasis_n ρf Qw d:x' @ omega, degree=degree*4)
+    pinertia = -topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
+    # pinertia = topo.integral('pbasis_n ρf φ d:x' @ omega, degree=degree*4)
+    # pinertia = topo.integral('(pbasis_n,i ρf u_i) d:x' @ omega, degree=degree*4)
+    # pinertia += topo.boundary['inner'].integral('pbasis_n Vw ρf d:x' @ omega, degree=degree*4)
 
-    # plottopo = topo[:, :, 0:].boundary['back']
+    # lhsp1 = solver.solve_linear('lhsp', resp, constrain=consp)
+
+    plottopo = topo[:, :, 0:].boundary['back']
 
     # locally refine around inner boundary
-    nref = 2
-    print(np.array(geom[0]))
-    refined_topo = RefineBySDF(topo, geom[0], nref)
+    # nref = 6
+    # refined_topo = RefineBySDF(topo, geom[0], nref)
 
-    # bezier = plottopo.sample('bezier', 9)
-    bezier = refined_topo.sample('bezier', 9)
+    bezier = plottopo.sample('bezier', 9)
+    # bezier = refined_topo.sample('bezier', 9)
+    # bezier = topo.sample('bezier', 9)
+    # plottopo= refined_topo
+
     with treelog.iter.plain(
             'timestep', solver.impliciteuler(('lhsp'), residual=resp, inertia=pinertia,
                                              arguments=statep0, timestep=timestep, constrain=consp,
-                                             newtontol=0.3)) as steps:
+                                             newtontol=1e-2)) as steps:
 
         pwell = np.empty([N])
 
@@ -188,10 +203,9 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
             x, r, z, p, u, p0 = bezier.eval([omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp)
             pex = omega.pexact.eval().reshape(-1)
 
-            pwell[istep] = p[0]
-
-            print("exact well pressure difference", pex[istep])
-            print("well pressure difference", p[0] - p0[0])
+            pwell[istep] = p.take(bezier.tri.T, 0)[1][0]
+            print("well pressure ", pwell[istep])
+            print("exact well pressure", p0[0] + pex[istep])
 
             with export.mplfigure('pressure.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -228,9 +242,9 @@ def main(degree:int, btype:str, timestep:float, maxradius:float, endtime:float):
 
                 # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
                 break
-
         return
     return
+
 
 if __name__ == '__main__':
     cli.run(main)
