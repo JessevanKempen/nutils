@@ -444,24 +444,24 @@ def DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime):
                 make_plots()
                 break
 
-    # # Time dependent heat transport process
-    # bezier = topo.sample('bezier', 5)
-    # with treelog.iter.plain(
-    #         'timestep', solver.impliciteuler(('lhsT'), residual=resT, inertia=Tinertia,
-    #          arguments=dict(lhsp=lhsp, lhsT=Tdofs0), timestep=timestep, constrain=consT,
-    #          newtontol=1e-2)) as steps:
-    #
-    #     for istep, lhsT in enumerate(steps):
-    #
-    #         time = istep * timestep
-    #         # x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
-    #         x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
-    #
-    #         if time >= endtime:
-    #             print(len(x[:,0]), len(T))
-    #
-    #             make_plots()
-    #             break
+    # Time dependent heat transport process
+    bezier = topo.sample('bezier', 5)
+    with treelog.iter.plain(
+            'timestep', solver.impliciteuler(('lhsT'), residual=resT, inertia=Tinertia,
+             arguments=dict(lhsp=lhsp, lhsT=Tdofs0), timestep=timestep, constrain=consT,
+             newtontol=1e-2)) as steps:
+
+        for istep, lhsT in enumerate(steps):
+
+            time = istep * timestep
+            # x, u, p, T = bezier.eval(['x_i', 'u_i', 'p', 'T'] @ ns, **state)
+            x, p, u, T = bezier.eval(['x_i', 'p', 'u_i', 'T'] @ ns, lhsp=lhsp, lhsT=lhsT)
+
+            if time >= endtime:
+                print(len(x[:,0]), len(T))
+
+                make_plots()
+                break
 
     bar = 1e5
     p_inlet = p[0]/bar
