@@ -88,7 +88,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Fraction of timestep and element size: timestep=timescale/nelems.
        maxradius [75]
          Target exterior radius of influence.
-       endtime [180]
+       endtime [1200]
          Stopping time.
     '''
 # degree = 2
@@ -220,6 +220,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     resT = topo.integral('(ρf cf Tbasis_n (u_k T)_,k ) d:x' @ omega, degree=degree * 2)
     resT += topo.integral('Tbasis_n,i (- λ) T_,i d:x' @ omega, degree=degree * 2)
     resT -= topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,k n_k d:x' @ omega, degree=degree*4)
+    resT2 = resT + topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,k n_k d:x' @ omega, degree=degree*4)
     resT -= topo.boundary['strata'].integral('(Tbasis_n T_,i n_i) d:x' @ omega, degree=degree*4)
     # resT -= topo.boundary['top,bottom'].integral('Tbasis_n qh d:x' @ omega, degree=degree * 2)  # heat flux on boundary
     Tinertia = topo.integral('ρ cp Tbasis_n T d:x' @ omega, degree=degree * 4)
@@ -243,7 +244,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
             parrayexact[istep] = pex
-            Qarray[istep] = omega.Q.eval()
+            Qarray[istep] = -omega.Q.eval()
 
             print("well pressure ", parraywell[istep])
             print("exact well pressure", pex)
@@ -274,7 +275,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                 fig.colorbar(im)
 
             if time >= endtime:
-                omega.Q = 0
 
                 with export.mplfigure('pressuretime.png', dpi=800) as plt:
                     ax1 = plt.subplots()
@@ -296,17 +296,17 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             time = istep * timestep
 
             # define analytical solution
-            pex = ppostprocess(omega, time)
+            pex2 = ppostprocess2(omega, time, pex)
 
             x, r, z, p, u, p0 = bezier.eval(
                 [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp2)
 
             parraywell[N+istep] = p.take(bezier.tri.T, 0)[1][0]
-            Qarray[N+istep] = omega.Q.eval()
-            # parrayexact[istep] = pex
+            Qarray[N+istep] = 0
+            parrayexact[N+istep] = pex2
 
             print("well pressure ", parraywell[istep])
-            print("exact well pressure", pex)
+            print("exact well pressure", pex2)
 
             with export.mplfigure('pressure.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -342,10 +342,10 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax1.set_ylabel('Pressure [MPa]', color='b')
                     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
                     ax1.plot(timeperiod, parraywell/1e6, 'bo')
+                    ax1.plot(timeperiod, parrayexact/1e6)
                     ax2.plot(timeperiod, Qarray, 'k')
 
-
-                    # ax.plot(2*timeperiod, parrayexact/1e6)
+                    # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
 
                 break
 
@@ -401,67 +401,59 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
                 break
 
+    with treelog.iter.plain(
+        'timestep', solver.impliciteuler(('lhsT'), residual=(resT2), inertia=(Tinertia),
+                                         arguments=(dict(lhsT=lhsT, lhsp=lhsp2)), timestep=timestep,
+                                         constrain=(consT),
+                                         newtontol=1e-2)) as tsteps:
+        time = 0
+        istep = 0
+        for istep, lhsT in enumerate(tsteps):
+            time = istep * timestep
+
+            # define analytical solution
+            Tex2 = Tpostprocess2(omega, time, Tex)
+
+            x, r, z, T = bezier.eval(
+                # [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp, lhsT=lhsT)
+                [omega.x, omega.r, omega.z, omega.T], lhsT=lhsT)
+
+            Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
+            Tarrayexact[N+istep] = Tex2
+
+            print("well temperature ", Tarraywell[istep])
+            print("exact well temperature", Tex2)
+
+            with export.mplfigure('temperature.png', dpi=800) as fig:
+                ax = fig.add_subplot(111, title='temperature', aspect=1)
+                ax.autoscale(enable=True, axis='both', tight=True)
+                im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
+                ax.add_collection(
+                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                               alpha=0.2))
+                fig.colorbar(im)
+
+            with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                ax = plt.subplots()
+                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
+
+            with export.mplfigure('pressure1d.png', dpi=800) as plt:
+                ax = plt.subplots()
+                ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
+
+            if time >= endtime:
+
+                with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
+                    ax.plot(timeperiod, Tarraywell, 'ro')
+                    ax.plot(timeperiod, Tarrayexact, 'r')
+
+                break
+
     return lhsT, lhsp
-
-    # with treelog.iter.plain(
-    #         'timestep', solver.impliciteuler(('lhsT'), residual=(resT), inertia=(Tinertia),
-    #          arguments=(dict(lhsT=Tdofs0, lhsp=lhsp)), timestep=timestep, constrain=(consT),
-    #          newtontol=1e-2)) as tsteps:
-    #
-    #     pwell = np.empty([N+1])
-    #
-    #     for istep, lhsT in enumerate(tsteps):
-    #         time = istep * timestep
-    #
-    #         x, r, z, T, u, p0 = bezier.eval(
-    #             # [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp, lhsT=lhsT)
-    #             [omega.x, omega.r, omega.z, omega.T], lhsT=lhsT)
-    #         # pex = omega.pexact.eval().reshape(-1)
-    #         # pwell[istep] = p.take(bezier.tri.T, 0)[1][0]
-    #
-    #         # print("well pressure ", pwell[istep])
-    #         # print("exact well pressure", p0[0] + pex[istep])
-    #
-    #         with export.mplfigure('pressure.png', dpi=800) as fig:
-    #             ax = fig.add_subplot(111, title='pressure', aspect=1)
-    #             ax.autoscale(enable=True, axis='both', tight=True)
-    #             im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
-    #             ax.add_collection(
-    #                 collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-    #                                            alpha=0.2))
-    #             fig.colorbar(im)
-    #
-    #         with export.mplfigure('pressure1d.png', dpi=800) as plt:
-    #             ax = plt.subplots()
-    #             ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-    #             ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
-    #             # ax.plot(np.array(r), np.array(p))
-    #
-    #         # uniform = plottopo.sample('uniform', 1)
-    #         # r_, z_, uv = uniform.eval(
-    #         #     [omega.r, omega.z, omega.u], lhsp=lhsp)
-    #         #
-    #         # with export.mplfigure('velocity.png', dpi=800) as fig:
-    #         #     ax = fig.add_subplot(111, title='Velocity', aspect=1)
-    #         #     ax.autoscale(enable=True, axis='both', tight=True)
-    #         #     im = ax.tripcolor(r, z, bezier.tri, u, shading='gouraud', cmap='jet')
-    #         #     ax.quiver(r_, z_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
-    #         #     fig.colorbar(im)
-    #
-    #         if time >= halftime:
-    #
-    #             # with export.mplfigure('pressuretime.png', dpi=800) as plt:
-    #             #     ax = plt.subplots()
-    #             #     ax.set(xlabel='Time [s]', ylabel='Pressure [MPa]')
-    #             #     ax.plot(timeperiod, pwell/1e6, 'bo')
-    #             #     ax.plot(timeperiod, (p0[0] + pex)/1e6)
-    #
-    #             # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
-    #          if time >= endtime:
-    #             break
-
-    #     return
-    # return
 
 # Postprocessing in this script is separated so that it can be reused for the
 # results of Navier-Stokes and the Energy Balance
@@ -479,9 +471,16 @@ def ppostprocess(omega, time):
     # pex = omega.pexact.eval().reshape(-1)
     return pex
 
+def ppostprocess2(omega, time, pex):
+    omega = omega.copy_()
+    omega.eta = omega.φ * omega.ct / omega.k[0][0]
+    omega.pei = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * math.pi * omega.k[0][0] * time)).eval())
+    pex2 = (pex + omega.Q * omega.pei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+
+    return pex2
+
 def Tpostprocess(omega, time):
     constantjt = -1.478e-7
-
 
     omega = omega.copy_()
     omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
@@ -492,6 +491,19 @@ def Tpostprocess(omega, time):
            ).eval()
 
     return Tex
+
+def Tpostprocess2(omega, time, Tex):
+    constantjt = -1.478e-7
+
+    omega = omega.copy_()
+    omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
+
+    omega.Tei = sc.expi((-omega.eta/(4*time) - ( omega.cs * omega.Q * omega.eta) / (4 * math.pi * omega.H)).eval())
+    Tex2 = (Tex - constantjt * omega.Q * -sc.expi((-omega.eta/(4*time)).eval()) / (4 * omega.pi * omega.k[0][0] * omega.H) +
+           (omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf)) - constantjt ) * omega.Tei
+           ).eval()
+
+    return Tex2
 
 if __name__ == '__main__':
     cli.run(main)
