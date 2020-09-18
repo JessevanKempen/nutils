@@ -148,9 +148,9 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     #     # add to the namespace
     # omega.MyEval = MyEval(omega.t)
 
-    omega.Q = -0.01
+    omega.Q = -0.07
 
-    omega.p0 = 100e5
+    omega.p0 = 220e5
     omega.pi = math.pi
     omega.cf = 4200 #aquifer.Cp_f [J/kg K]
     omega.cs = 2650 #870 #aquifer.Cp_f [J/kg K]
@@ -176,13 +176,14 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
     omega.q_i = '-k_ij (p_,j - ρf g x_1,j)'
-    omega.u_i = 'q_i φ'
+    omega.u_i = 'q_i'
     omega.T0 = 90+273
     parraywell = np.empty([2*N+1])
     parrayexact = np.empty(2*N+1)
     Tarraywell = np.empty(2*N+1)
     Tarrayexact = np.empty(2*N+1)
     Qarray = np.empty(2*N+1)
+    parrayexp = np.empty(2*N+1)
 
     # define initial state
     sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
@@ -304,6 +305,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             parraywell[N+istep] = p.take(bezier.tri.T, 0)[1][0]
             Qarray[N+istep] = 0
             parrayexact[N+istep] = pex2
+            # parrayexp = [22.24 ]
 
             print("well pressure ", parraywell[istep])
             print("exact well pressure", pex2)
@@ -343,6 +345,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
                     ax1.plot(timeperiod, parraywell/1e6, 'bo')
                     ax1.plot(timeperiod, parrayexact/1e6)
+                    # ax1.plot(timeperiod, parrayexp/1e6)
                     ax2.plot(timeperiod, Qarray, 'k')
 
                     # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
