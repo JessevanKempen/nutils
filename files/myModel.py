@@ -6,6 +6,8 @@ import math
 import vtk
 import scipy.special as sc
 import matplotlib.tri as tri
+import pandas as pd
+from scipy import stats
 
 from myIOlib import *
 
@@ -82,13 +84,13 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Polynomial degree for pressure space.
        btype [spline]
          Type of basis function (std/spline)
-       timestep [60]
+       timestep [30]
          Time step.
        timescale [.5]
          Fraction of timestep and element size: timestep=timescale/nelems.
        maxradius [75]
          Target exterior radius of influence.
-       endtime [1200]
+       endtime [360]
          Stopping time.
     '''
 # degree = 2
@@ -150,7 +152,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
     omega.Q = -0.07
 
-    omega.p0 = 220e5
+    omega.p0 = 222.5e5
     omega.pi = math.pi
     omega.cf = 4200 #aquifer.Cp_f [J/kg K]
     omega.cs = 2650 #870 #aquifer.Cp_f [J/kg K]
@@ -171,7 +173,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = 1/(omega.mu)*np.diag(k_int)
     omega.ur = omega.Q / (2 * math.pi * rw * H)
-    omega.uw = omega.ur / rw
+    omega.uw = omega.ur
     omega.λ = omega.φ * omega.λf + (1 - omega.φ) * omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
@@ -184,6 +186,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     Tarrayexact = np.empty(2*N+1)
     Qarray = np.empty(2*N+1)
     parrayexp = np.empty(2*N+1)
+    Tarrayexp = np.empty(2*N+1)
 
     # define initial state
     sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
@@ -247,8 +250,11 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             parrayexact[istep] = pex
             Qarray[istep] = -omega.Q.eval()
 
+            parrayexp[istep] = get_welldata("PRESSURE")[istep]/10
+
             print("well pressure ", parraywell[istep])
             print("exact well pressure", pex)
+            print("data well pressure", parrayexp[istep])
 
             with export.mplfigure('pressure.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -285,6 +291,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
                     ax1.plot(timeperiod, parraywell/1e6, 'bo')
                     ax1.plot(timeperiod, parrayexact/1e6)
+                    ax1.plot(timeperiod, parrayexp)
                     ax2.plot(timeperiod, Qarray, 'k')
                 break
 
@@ -305,6 +312,8 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             parraywell[N+istep] = p.take(bezier.tri.T, 0)[1][0]
             Qarray[N+istep] = 0
             parrayexact[N+istep] = pex2
+            print(get_welldata("PRESSURE")[213+istep]/10)
+            parrayexp[N+istep] = get_welldata("PRESSURE")[212+istep]/10
             # parrayexp = [22.24 ]
 
             print("well pressure ", parraywell[istep])
@@ -345,6 +354,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
                     ax1.plot(timeperiod, parraywell/1e6, 'bo')
                     ax1.plot(timeperiod, parrayexact/1e6)
+                    ax1.plot(timeperiod, parrayexp)
                     # ax1.plot(timeperiod, parrayexp/1e6)
                     ax2.plot(timeperiod, Qarray, 'k')
 
@@ -371,6 +381,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
             Tarrayexact[istep] = Tex
+            Tarrayexp[istep] = get_welldata("TEMPERATURE")[istep]/10
 
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex)
@@ -401,6 +412,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
                     ax.plot(timeperiod, Tarraywell, 'ro')
                     ax.plot(timeperiod, Tarrayexact)
+                    ax.plot(timeperiod, Tarrayexp)
 
                 break
 
@@ -423,6 +435,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
             Tarrayexact[N+istep] = Tex2
+            Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]/10
 
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex2)
@@ -453,6 +466,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
                     ax.plot(timeperiod, Tarraywell, 'ro')
                     ax.plot(timeperiod, Tarrayexact, 'r')
+                    ax.plot(timeperiod, Tarrayexp)
 
                 break
 
@@ -507,6 +521,15 @@ def Tpostprocess2(omega, time, Tex):
            ).eval()
 
     return Tex2
+
+#user input
+def get_welldata(parameter):
+    welldata = pd.read_excel(r'C:\Users\s141797\OneDrive - TU Eindhoven\Scriptie\nlog_welldata.xlsx') #for an earlier version of Excel use 'xls'
+    columns = ['PRESSURE', 'TEMPERATURE','CORRECTED_TIME']
+
+    df = pd.DataFrame(welldata, columns = columns)
+
+    return np.array(df.loc[:, parameter]) #np.array(df['PRESSURE']), np.array(df['TEMPERATURE'])
 
 if __name__ == '__main__':
     cli.run(main)
