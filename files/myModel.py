@@ -90,7 +90,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Fraction of timestep and element size: timestep=timescale/nelems.
        maxradius [75]
          Target exterior radius of influence.
-       endtime [360]
+       endtime [60]
          Stopping time.
     '''
 # degree = 2
@@ -100,8 +100,8 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 # endtime = 100
 
 
-    N = round((endtime / timestep))
-    timeperiod = timestep * np.linspace(0, 2*N, 2*N+1)
+    N = round((endtime / timestep))+1
+    timeperiod = timestep * np.linspace(0, 2*N, 2*N)
     halftime = endtime/2
 
     rw = 1
@@ -172,21 +172,21 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     k_int_x = 1e-13 #aquifer.K
     k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = 1/(omega.mu)*np.diag(k_int)
-    omega.ur = omega.Q / (2 * math.pi * rw * H)
-    omega.uw = omega.ur
+    omega.uw = omega.Q / (2 * math.pi * rw * H)
+    omega.qw = omega.uw/omega.φ
     omega.λ = omega.φ * omega.λf + (1 - omega.φ) * omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
     omega.q_i = '-k_ij (p_,j - ρf g x_1,j)'
-    omega.u_i = 'q_i'
+    omega.u_i = 'q_i φ'
     omega.T0 = 90+273
-    parraywell = np.empty([2*N+1])
-    parrayexact = np.empty(2*N+1)
-    Tarraywell = np.empty(2*N+1)
-    Tarrayexact = np.empty(2*N+1)
-    Qarray = np.empty(2*N+1)
-    parrayexp = np.empty(2*N+1)
-    Tarrayexp = np.empty(2*N+1)
+    parraywell = np.empty([2*N])
+    parrayexact = np.empty(2*N)
+    Tarraywell = np.empty(2*N)
+    Tarrayexact = np.empty(2*N)
+    Qarray = np.empty(2*N)
+    parrayexp = np.empty(2*N)
+    Tarrayexp = np.empty(2*N)
 
     # define initial state
     sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
@@ -199,8 +199,8 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     consp = dict(lhsp=cons)
 
     # formulate hydraulic process single field
-    resp = topo.integral('(pbasis_n,i ρf u_i) d:x' @ omega, degree=degree*4)
-    resp += topo.boundary['strata'].integral('(pbasis_n ρf u_i n_i) d:x' @ omega, degree=degree*4)
+    resp = topo.integral('(pbasis_n,i ρf q_i) d:x' @ omega, degree=degree*4)
+    resp += topo.boundary['strata'].integral('(pbasis_n ρf q_i n_i) d:x' @ omega, degree=degree*4)
     resp += topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
     resp2 = resp -topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
     pinertia = -topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
@@ -381,7 +381,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
             Tarrayexact[istep] = Tex
-            Tarrayexp[istep] = get_welldata("TEMPERATURE")[istep]/10
+            Tarrayexp[istep] = get_welldata("TEMPERATURE")[istep]+273
 
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex)
@@ -435,7 +435,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
             Tarrayexact[N+istep] = Tex2
-            Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]/10
+            Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]+273
 
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex2)
