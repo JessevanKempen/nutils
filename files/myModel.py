@@ -90,7 +90,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Fraction of timestep and element size: timestep=timescale/nelems.
        maxradius [75]
          Target exterior radius of influence.
-       endtime [60]
+       endtime [2700]
          Stopping time.
     '''
 # degree = 2
@@ -178,8 +178,8 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
     omega.q_i = '-k_ij (p_,j - ρf g x_1,j)'
-    omega.u_i = 'q_i φ'
-    omega.T0 = 90+273
+    omega.u_i = 'q_i / φ'
+    omega.T0 = 88.33+273
     parraywell = np.empty([2*N])
     parrayexact = np.empty(2*N)
     Tarraywell = np.empty(2*N)
@@ -187,6 +187,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     Qarray = np.empty(2*N)
     parrayexp = np.empty(2*N)
     Tarrayexp = np.empty(2*N)
+    LHSPmatrix = np.empty([2*N, 1558])
 
     # define initial state
     sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
@@ -195,8 +196,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
     # define dirichlet constraints
     sqrp = topo.boundary['outer'].integral('(p - p0) (p - p0) d:x' @ omega, degree=degree*2) # set outer condition to p(rmax,y,z,t) = p0
-    cons = solver.optimize('lhsp', sqrp, droptol=1e-15)
-    consp = dict(lhsp=cons)
+    consp = solver.optimize('lhsp', sqrp, droptol=1e-15)
 
     # formulate hydraulic process single field
     resp = topo.integral('(pbasis_n,i ρf q_i) d:x' @ omega, degree=degree*4)
@@ -217,8 +217,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
     # define dirichlet constraints for thermo process
     sqrT = topo.boundary['outer'].integral('(T - T0) (T - T0) d:x' @ omega, degree=degree * 2)
-    cons = solver.optimize('lhsT', sqrT, droptol=1e-15)
-    consT = dict(lhsT=cons)
+    consT = solver.optimize('lhsT', sqrT, droptol=1e-15)
 
     # formulate thermo process
     resT = topo.integral('(ρf cf Tbasis_n (u_k T)_,k ) d:x' @ omega, degree=degree * 2)
@@ -236,15 +235,19 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     # lhsp = solver.solve_linear('lhsp', resp, constrain=consp)
 
     with treelog.iter.plain(
-            'timestep', solver.impliciteuler(('lhsp'), resp, pinertia, timestep=timestep, arguments=dict(lhsp=pdofs0), constrain=consp, newtontol=1e-2)) as psteps:
-        for istep, lhsp in enumerate(psteps):
+            'timestep', solver.impliciteuler(['lhsp', 'lhsT'], (resp, resT), (pinertia, Tinertia), timestep=timestep, arguments=dict(lhsp=pdofs0, lhsT=Tdofs0), constrain=(dict(lhsp=consp, lhsT=consT)), newtontol=1e-2)) as steps:
+
+        for istep, lhs in enumerate(steps):
             time = istep * timestep
 
             # define analytical solution
             pex = ppostprocess(omega, time)
 
-            x, r, z, p, u, p0 = bezier.eval(
-                [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp)
+            # # define analytical solution
+            Tex = Tpostprocess(omega, time)
+
+            x, r, z, p, u, p0, T = bezier.eval(
+                [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0, omega.T], lhsp=lhs["lhsp"], lhsT = lhs["lhsT"])
 
             parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
             parrayexact[istep] = pex
@@ -255,6 +258,13 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             print("well pressure ", parraywell[istep])
             print("exact well pressure", pex)
             print("data well pressure", parrayexp[istep])
+
+            Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
+            Tarrayexact[istep] = Tex
+            Tarrayexp[istep] = get_welldata("TEMPERATURE")[istep]+273
+
+            print("well temperature ", Tarraywell[istep])
+            print("exact well temperature", Tex)
 
             with export.mplfigure('pressure.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -272,7 +282,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             uniform = plottopo.sample('uniform', 1)
             r_, z_, uv = uniform.eval(
-                [omega.r, omega.z, omega.u], lhsp=lhsp)
+                [omega.r, omega.z, omega.u], lhsp=lhs["lhsp"])
 
             with export.mplfigure('velocity.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='Velocity', aspect=1)
@@ -293,31 +303,51 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax1.plot(timeperiod, parrayexact/1e6)
                     ax1.plot(timeperiod, parrayexp)
                     ax2.plot(timeperiod, Qarray, 'k')
+
+                with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
+                    ax.plot(timeperiod, Tarraywell, 'ro')
+                    ax.plot(timeperiod, Tarrayexact)
+                    ax.plot(timeperiod, Tarrayexp)
+
                 break
 
     with treelog.iter.plain(
-            'timestep', solver.impliciteuler(('lhsp'), resp2, pinertia, timestep=timestep, arguments=dict(lhsp=lhsp), constrain=consp, newtontol=1e-2)) as psteps:
+            'timestep', solver.impliciteuler(['lhsp', 'lhsT'], (resp2, resT2), (pinertia, Tinertia), timestep=timestep,
+                                 arguments=dict(lhsp=lhs["lhsp"], lhsT=lhs["lhsT"]), constrain=(dict(lhsp=consp, lhsT=consT)),
+                                 newtontol=1e-2)) as steps:
+            # 'timestep', solver.impliciteuler(('lhsp'), resp2, pinertia, timestep=timestep, arguments=dict(lhsp=lhsp), constrain=consp, newtontol=1e-2)) as steps:
         time = 0
+        istep = 0
 
-        for istep, lhsp2 in enumerate(psteps):
-
+        for istep, lhs2 in enumerate(steps):
             time = istep * timestep
 
             # define analytical solution
             pex2 = ppostprocess2(omega, time, pex)
 
-            x, r, z, p, u, p0 = bezier.eval(
-                [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp2)
+            # define analytical solution
+            Tex2 = Tpostprocess2(omega, time, Tex)
+
+            x, r, z, p, u, p0, T = bezier.eval(
+                [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0, omega.T], lhsp=lhs2["lhsp"], lhsT=lhs2["lhsT"])
 
             parraywell[N+istep] = p.take(bezier.tri.T, 0)[1][0]
             Qarray[N+istep] = 0
             parrayexact[N+istep] = pex2
             print(get_welldata("PRESSURE")[213+istep]/10)
             parrayexp[N+istep] = get_welldata("PRESSURE")[212+istep]/10
-            # parrayexp = [22.24 ]
 
             print("well pressure ", parraywell[istep])
             print("exact well pressure", pex2)
+
+            Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
+            Tarrayexact[N+istep] = Tex2
+            Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]+273
+
+            print("well temperature ", Tarraywell[istep])
+            print("exact well temperature", Tex2)
 
             with export.mplfigure('pressure.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -335,7 +365,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             uniform = plottopo.sample('uniform', 1)
             r_, z_, uv = uniform.eval(
-                [omega.r, omega.z, omega.u], lhsp=lhsp2)
+                [omega.r, omega.z, omega.u], lhsp=lhs2["lhsp"])
 
             with export.mplfigure('velocity.png', dpi=800) as fig:
                 ax = fig.add_subplot(111, title='Velocity', aspect=1)
@@ -358,109 +388,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     # ax1.plot(timeperiod, parrayexp/1e6)
                     ax2.plot(timeperiod, Qarray, 'k')
 
-                    # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
-
-                break
-
-    with treelog.iter.plain(
-        'timestep', solver.impliciteuler(('lhsT'), residual=(resT), inertia=(Tinertia),
-                                         arguments=(dict(lhsT=Tdofs0, lhsp=lhsp)), timestep=timestep,
-                                         constrain=(consT),
-                                         newtontol=1e-2)) as tsteps:
-        time = 0
-        istep = 0
-        for istep, lhsT in enumerate(tsteps):
-            time = istep * timestep
-
-            # define analytical solution
-            Tex = Tpostprocess(omega, time)
-
-            x, r, z, T = bezier.eval(
-                # [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp, lhsT=lhsT)
-                [omega.x, omega.r, omega.z, omega.T], lhsT=lhsT)
-
-            Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
-            Tarrayexact[istep] = Tex
-            Tarrayexp[istep] = get_welldata("TEMPERATURE")[istep]+273
-
-            print("well temperature ", Tarraywell[istep])
-            print("exact well temperature", Tex)
-
-            with export.mplfigure('temperature.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='temperature', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
-
-            with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
-
-            if time >= endtime:
-
-                with export.mplfigure('temperaturetime.png', dpi=800) as plt:
-                    ax = plt.subplots()
-                    ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
-                    ax.plot(timeperiod, Tarraywell, 'ro')
-                    ax.plot(timeperiod, Tarrayexact)
-                    ax.plot(timeperiod, Tarrayexp)
-
-                break
-
-    with treelog.iter.plain(
-        'timestep', solver.impliciteuler(('lhsT'), residual=(resT2), inertia=(Tinertia),
-                                         arguments=(dict(lhsT=lhsT, lhsp=lhsp2)), timestep=timestep,
-                                         constrain=(consT),
-                                         newtontol=1e-2)) as tsteps:
-        time = 0
-        istep = 0
-        for istep, lhsT in enumerate(tsteps):
-            time = istep * timestep
-
-            # define analytical solution
-            Tex2 = Tpostprocess2(omega, time, Tex)
-
-            x, r, z, T = bezier.eval(
-                # [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp, lhsT=lhsT)
-                [omega.x, omega.r, omega.z, omega.T], lhsT=lhsT)
-
-            Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
-            Tarrayexact[N+istep] = Tex2
-            Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]+273
-
-            print("well temperature ", Tarraywell[istep])
-            print("exact well temperature", Tex2)
-
-            with export.mplfigure('temperature.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='temperature', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
-
-            with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
-
-            if time >= endtime:
-
                 with export.mplfigure('temperaturetime.png', dpi=800) as plt:
                     ax = plt.subplots()
                     ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
@@ -468,9 +395,122 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax.plot(timeperiod, Tarrayexact, 'r')
                     ax.plot(timeperiod, Tarrayexp)
 
+
+                    # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
+
                 break
 
-    return lhsT, lhsp
+    # with treelog.iter.plain(
+    #     'timestep', solver.impliciteuler(('lhsT'), residual=(resT), inertia=(Tinertia),
+    #                                      arguments=(dict(lhsT=Tdofs0, lhsp=LHSPmatrix['timestep'])), timestep=timestep,
+    #                                      constrain=(consT),
+    #                                      newtontol=1e-2)) as tsteps:
+    #     time = 0
+    #     istep = 0
+    #     for istep, lhsT in enumerate(tsteps):
+    #         print("LHSP test", LHSPmatrix[counter])
+    #         time = istep * timestep
+    #         counter = counter + 1
+    #
+    #         # define analytical solution
+    #         Tex = Tpostprocess(omega, time)
+    #
+    #         x, r, z, T = bezier.eval(
+    #             # [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp, lhsT=lhsT)
+    #             [omega.x, omega.r, omega.z, omega.T], lhsT=lhsT)
+    #
+    #         Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
+    #         Tarrayexact[istep] = Tex
+    #         Tarrayexp[istep] = get_welldata("TEMPERATURE")[istep]+273
+    #
+    #         print("well temperature ", Tarraywell[istep])
+    #         print("exact well temperature", Tex)
+    #
+    #         with export.mplfigure('temperature.png', dpi=800) as fig:
+    #             ax = fig.add_subplot(111, title='temperature', aspect=1)
+    #             ax.autoscale(enable=True, axis='both', tight=True)
+    #             im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
+    #             ax.add_collection(
+    #                 collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+    #                                            alpha=0.2))
+    #             fig.colorbar(im)
+    #
+    #         with export.mplfigure('temperature1d.png', dpi=800) as plt:
+    #             ax = plt.subplots()
+    #             ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+    #             ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
+    #
+    #         with export.mplfigure('pressure1d.png', dpi=800) as plt:
+    #             ax = plt.subplots()
+    #             ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+    #             ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
+    #
+    #         if time >= endtime:
+    #
+    #             with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+    #                 ax = plt.subplots()
+    #                 ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
+    #                 ax.plot(timeperiod, Tarraywell, 'ro')
+    #                 ax.plot(timeperiod, Tarrayexact)
+    #                 ax.plot(timeperiod, Tarrayexp)
+    #
+    #             break
+    #
+    # with treelog.iter.plain(
+    #     'timestep', solver.impliciteuler(('lhsT'), residual=(resT2), inertia=(Tinertia),
+    #                                      arguments=(dict(lhsT=lhsT, lhsp=lhsp2)), timestep=timestep,
+    #                                      constrain=(consT),
+    #                                      newtontol=1e-2)) as tsteps:
+    #     time = 0
+    #     istep = 0
+    #     for istep, lhsT in enumerate(tsteps):
+    #         time = istep * timestep
+    #
+    #         # define analytical solution
+    #         Tex2 = Tpostprocess2(omega, time, Tex)
+    #
+    #         x, r, z, T = bezier.eval(
+    #             # [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0], lhsp=lhsp, lhsT=lhsT)
+    #             [omega.x, omega.r, omega.z, omega.T], lhsT=lhsT)
+    #
+    #         Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
+    #         Tarrayexact[N+istep] = Tex2
+    #         Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]+273
+    #
+    #         print("well temperature ", Tarraywell[istep])
+    #         print("exact well temperature", Tex2)
+    #
+    #         with export.mplfigure('temperature.png', dpi=800) as fig:
+    #             ax = fig.add_subplot(111, title='temperature', aspect=1)
+    #             ax.autoscale(enable=True, axis='both', tight=True)
+    #             im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
+    #             ax.add_collection(
+    #                 collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+    #                                            alpha=0.2))
+    #             fig.colorbar(im)
+    #
+    #         with export.mplfigure('temperature1d.png', dpi=800) as plt:
+    #             ax = plt.subplots()
+    #             ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+    #             ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
+    #
+    #         with export.mplfigure('pressure1d.png', dpi=800) as plt:
+    #             ax = plt.subplots()
+    #             ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+    #             ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
+    #
+    #         if time >= endtime:
+    #
+    #             with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+    #                 ax = plt.subplots()
+    #                 ax.set(xlabel='Time [s]', ylabel='Temperature [K]')
+    #                 ax.plot(timeperiod, Tarraywell, 'ro')
+    #                 ax.plot(timeperiod, Tarrayexact, 'r')
+    #                 ax.plot(timeperiod, Tarrayexp)
+    #
+    #             break
+
+    return
 
 # Postprocessing in this script is separated so that it can be reused for the
 # results of Navier-Stokes and the Energy Balance
