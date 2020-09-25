@@ -57,7 +57,7 @@ print("Constructing the FE model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
 
-def RefineBySDF(topo, sdf, nrefine):
+def RefineBySDF(topo, radius, sdf, nrefine):
     refined_topo = topo
     for n in range(nrefine):
         elems_to_refine = []
@@ -66,12 +66,11 @@ def RefineBySDF(topo, sdf, nrefine):
         sd = bez.eval(sdf)
         sd = sd.reshape( [len(sd)//4, 4] )
         for i in range(len(sd)):
-            # print(sd[i,:])
-            if any(np.sign(sdval) != np.sign(sd[i][0]) for sdval in sd[i,:]):
+            if any(sd[i,:] == radius.eval()):
                 elems_to_refine.append(k)
             k = k + 1
-        # print(elems_to_refine)
         refined_topo = refined_topo.refined_by(refined_topo.transforms[np.array(elems_to_refine)])
+
     return refined_topo
 
 def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float, newtontol:float, endtime:float):
@@ -88,19 +87,19 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Time step.
        timescale [.5]
          Fraction of timestep and element size: timestep=timescale/nelems.
-       maxradius [75]
+       maxradius [100]
          Target exterior radius of influence.
        newtontol [1e-1]
          Newton tolerance.
-       endtime [2700]
+       endtime [270]
          Stopping time.
     '''
 # degree = 2
 # btype = 'spline'
 # timestep = 5
-# maxradius = 100
+# maxradius = 500
 # endtime = 100
-
+    from matplotlib import pyplot as plt
 
     N = round((endtime / timestep))+1
     timeperiod = timestep * np.linspace(0, 2*N, 2*N)
@@ -108,12 +107,12 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
     rw = 0.1
     rmax = maxradius
-    nelems = 21
+    nelems = 1
     H = 100
 
     rverts = np.linspace(rw, rmax, nelems+1)
     θverts = [0, 2 * np.pi]
-    zverts = np.linspace(0, H, 10)
+    zverts = np.linspace(0, H, 2)
 
     topo, geom = mesh.rectilinear(
         [rverts, zverts, θverts], periodic=[2])
@@ -121,7 +120,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
         inner=topo.boundary['left'], outer=topo.boundary['right'])
     topo = topo.withboundary(
         strata=topo.boundary-topo.boundary['inner,outer'])
-    # assert (topo.boundary['inner'].sample('bezier', 2).eval(geom[0]) == rw).all(), "Invalid inner boundary condition"
+    assert (topo.boundary['inner'].sample('bezier', 2).eval(geom[0]) == rw).all(), "Invalid inner boundary condition"
     assert (topo.boundary['outer'].sample('bezier', 2).eval(geom[0]) == rmax).all(), "Invalid outer boundary condition"
 
     omega = function.Namespace()
@@ -132,7 +131,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.Tbasis = topo.basis(btype, degree=degree, continuity=0)
     omega.p = 'pbasis_n ?lhsp_n'
     omega.T = 'Tbasis_n ?lhsT_n'
-    # omega.t = '?t'
 
     # # define custom nutils function
     # class MyEval(function.evaluable):
@@ -152,7 +150,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     #     # add to the namespace
     # omega.MyEval = MyEval(omega.t)
 
-    omega.Q = -0.07
+    omega.Q = 0.07
 
     omega.p0 = 222.5e5
     omega.pi = math.pi
@@ -165,7 +163,9 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.g = 0 #aquifer.g
     # omega.g_j = '<0, 0, 0>_j'
     omega.H = H
+    omega.H0 = 0
     omega.rw = rw
+    omega.rmax = rmax
     omega.mu = 3.1e-4 #aquifer.mu
     omega.φ = 0.2 #aquifer.porosity
     c_φ = 0#1e-8
@@ -175,12 +175,10 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = 1/(omega.mu)*np.diag(k_int)
     omega.uw = omega.Q / (2 * math.pi * rw * H)
-    omega.qw = omega.uw/omega.φ
-    omega.λ = omega.φ * omega.λf + (1 - omega.φ) * omega.λs
+    omega.λ = omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
     omega.q_i = '-k_ij (p_,j - ρf g x_1,j)'
-    omega.φinv = 1/omega.φ
     omega.u_i = 'q_i'
     omega.T0 = 88.33+273
     parraywell = np.empty([2*N])
@@ -190,7 +188,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     Qarray = np.empty(2*N)
     parrayexp = np.empty(2*N)
     Tarrayexp = np.empty(2*N)
-    LHSPmatrix = np.empty([2*N, 1558])
 
     # define initial state
     sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
@@ -202,9 +199,9 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
     # formulate hydraulic process single field
     resp = topo.integral('(pbasis_n,i ρf q_i) d:x' @ omega, degree=degree*4)
-    resp += topo.boundary['strata'].integral('(pbasis_n ρf q_i n_i) d:x' @ omega, degree=degree*4)
-    resp += topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
-    resp2 = resp -topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
+    # resp += topo.boundary['strata'].integral('(pbasis_n ρf q_i n_i) d:x' @ omega, degree=degree*4)
+    resp -= topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
+    resp2 = resp +topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
     pinertia = -topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
 
     # lhspd = solver.solve_linear('lhsp', resp, constrain=consp)
@@ -221,12 +218,32 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     resT = topo.integral('(ρf cf Tbasis_n (u_k T)_,k ) d:x' @ omega, degree=degree * 2)
     resT += topo.integral('Tbasis_n,i (- λ) T_,i d:x' @ omega, degree=degree * 2)
     resT -= topo.boundary['strata'].integral('(Tbasis_n T_,i n_i) d:x' @ omega, degree=degree*4)
-    resT -= topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,k n_k d:x' @ omega, degree=degree*4)
-    resT2 = resT + topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,k n_k d:x' @ omega, degree=degree*4)
+    resT -= topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,i n_i d:x' @ omega, degree=degree*4)
+    resT2 = resT + topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,i n_i d:x' @ omega, degree=degree*4)
     # resT -= topo.boundary['top,bottom'].integral('Tbasis_n qh d:x' @ omega, degree=degree * 2)  # heat flux on boundary
     Tinertia = topo.integral('ρ cp Tbasis_n T d:x' @ omega, degree=degree * 4)
 
     plottopo = topo[:, :, 0:].boundary['back']
+
+    # locally refine
+    # nref = 6
+    # omega.sd = (omega.x[0]) ** 2
+    # refined_topo = RefineBySDF(plottopo, omega.rw, geom[0], nref)
+    nref = 6
+    omega.sd = (omega.x[1]) ** 2
+    refined_topo = RefineBySDF(plottopo, omega.H, geom[1], nref)
+
+    plottopo = refined_topo
+
+    # mesh
+    bezier = plottopo.sample('bezier', 2)
+    with export.mplfigure('mesh.png', dpi=800) as fig:
+        r, z, col = bezier.eval([omega.r, omega.z, omega.sd])
+        ax = fig.add_subplot(1, 1, 1)
+        ax.tripcolor(r, z, bezier.tri, col, shading='gouraud', rasterized=True)
+        ax.add_collection(
+            collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                       alpha=0.2))
 
     bezier = plottopo.sample('bezier', 9)
     # solve for steady state state of pressure
@@ -237,19 +254,20 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
         for istep, lhs in enumerate(steps):
             time = istep * timestep
+            print("time", time)
 
             # define analytical solution
-            pex = ppostprocess(omega, time)
+            pex = panalyticaldrawdown(omega, time)
 
             # # define analytical solution
-            Tex = Tpostprocess(omega, time)
+            Tex = Tanalyticaldrawdown(omega, time)
 
             x, r, z, p, u, p0, T = bezier.eval(
                 [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0, omega.T], lhsp=lhs["lhsp"], lhsT = lhs["lhsT"])
 
             parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
             parrayexact[istep] = pex
-            Qarray[istep] = -omega.Q.eval()
+            Qarray[istep] = omega.Q.eval()
 
             parrayexp[istep] = get_welldata("PRESSURE")[istep]/10
 
@@ -264,46 +282,47 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex)
 
-            with export.mplfigure('pressure.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='pressure', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, p, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
-
-            with export.mplfigure('temperature.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='temperature', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
-
-            uniform = plottopo.sample('uniform', 1)
-            r_, z_, uv = uniform.eval(
-                [omega.r, omega.z, omega.u], lhsp=lhs["lhsp"])
-
-            with export.mplfigure('velocity.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='Velocity', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, u, shading='gouraud', cmap='jet')
-                ax.quiver(r_, z_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
-                fig.colorbar(im)
-
             if time >= endtime:
+
+                with export.mplfigure('pressure.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='pressure', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(r, z, bezier.tri, p, shading='gouraud', cmap='jet')
+                    ax.add_collection(
+                        collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                                   alpha=0.2))
+                    fig.colorbar(im)
+
+                with export.mplfigure('pressure1d.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+                    print("pressure array", p.take(bezier.tri.T, 0))
+                    ax.plot(r.take(bezier.tri.T, 0), p.take(bezier.tri.T, 0))
+
+                with export.mplfigure('temperature.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='temperature', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
+                    ax.add_collection(
+                        collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                                   alpha=0.2))
+                    fig.colorbar(im)
+
+                with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                    ax.plot(r.take(bezier.tri.T, 0), T.take(bezier.tri.T, 0))
+
+                uniform = plottopo.sample('uniform', 1)
+                r_, z_, uv = uniform.eval(
+                    [omega.r, omega.z, omega.u], lhsp=lhs["lhsp"])
+
+                with export.mplfigure('velocity.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='Velocity', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(r, z, bezier.tri, u, shading='gouraud', cmap='jet')
+                    ax.quiver(r_, z_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
+                    fig.colorbar(im)
 
                 with export.mplfigure('pressuretime.png', dpi=800) as plt:
                     ax1 = plt.subplots()
@@ -338,10 +357,10 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             time = istep * timestep
 
             # define analytical solution
-            pex2 = ppostprocess2(omega, time, pex)
+            pex2 = panalyticalbuildup(omega, time, pex)
 
             # define analytical solution
-            Tex2 = Tpostprocess2(omega, time, Tex)
+            Tex2 = Tanalyticalbuildup(omega, time, Tex)
 
             x, r, z, p, u, p0, T = bezier.eval(
                 [omega.x, omega.r, omega.z, omega.p, function.norm2(omega.u), omega.p0, omega.T], lhsp=lhs2["lhsp"], lhsT=lhs2["lhsT"])
@@ -362,46 +381,46 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex2)
 
-            with export.mplfigure('pressure.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='pressure', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, p, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(p.take(bezier.tri.T, 0)[1]))
-
-            uniform = plottopo.sample('uniform', 1)
-            r_, z_, uv = uniform.eval(
-                [omega.r, omega.z, omega.u], lhsp=lhs2["lhsp"])
-
-            with export.mplfigure('temperature.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='temperature', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                ax.plot(np.array(r.take(bezier.tri.T, 0)[1]), np.array(T.take(bezier.tri.T, 0)[1]))
-
-            with export.mplfigure('velocity.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='Velocity', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(r, z, bezier.tri, u, shading='gouraud', cmap='jet')
-                ax.quiver(r_, z_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
-                fig.colorbar(im)
-
             if time >= endtime:
+
+                with export.mplfigure('pressure.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='pressure', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(r, z, bezier.tri, p, shading='gouraud', cmap='jet')
+                    ax.add_collection(
+                        collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                                   alpha=0.2))
+                    fig.colorbar(im)
+
+                with export.mplfigure('pressure1d.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+                    ax.plot(r.take(bezier.tri.T, 0), p.take(bezier.tri.T, 0))
+
+                uniform = plottopo.sample('uniform', 1)
+                r_, z_, uv = uniform.eval(
+                    [omega.r, omega.z, omega.u], lhsp=lhs2["lhsp"])
+
+                with export.mplfigure('temperature.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='temperature', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(r, z, bezier.tri, T, shading='gouraud', cmap='jet')
+                    ax.add_collection(
+                        collections.LineCollection(np.array([r, z]).T[bezier.hull], colors='k', linewidths=0.2,
+                                                   alpha=0.2))
+                    fig.colorbar(im)
+
+                with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                    ax.plot(r.take(bezier.tri.T, 0), T.take(bezier.tri.T, 0))
+
+                with export.mplfigure('velocity.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='Velocity', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(r, z, bezier.tri, u, shading='gouraud', cmap='jet')
+                    ax.quiver(r_, z_, uv[:, 0], uv[:, 1], angles='xy', scale_units='xy')
+                    fig.colorbar(im)
 
                 with export.mplfigure('pressuretimebuildup.png', dpi=800) as plt:
                     ax1 = plt.subplots()
@@ -427,7 +446,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
                     ax1.legend(loc="lower right")
                     ax2.plot(timeperiod, Qarray, 'k')
 
-
                     # export.vtk('aquifer', bezier.tri, bezier.eval(omega.x))
 
                 break
@@ -436,50 +454,60 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 # Postprocessing in this script is separated so that it can be reused for the
 # results of Navier-Stokes and the Energy Balance
 
-def ppostprocess(omega, time):
+def panalyticaldrawdown(omega, time):
     omega = omega.copy_()
-    omega.eta = omega.φ * omega.ct / omega.k[0][0]
-    omega.pei = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * math.pi * omega.k[0][0] * time)).eval())
-    pex = (omega.p0 - omega.Q * omega.pei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
 
-    # omega.pexact = -omega.pexactd - omega.Q * omega.eib / (4 * omega.pi * omega.k[0][0] * omega.H)
-    # omega.eid = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * math.pi * omega.k[0][0] * timeperiodb)).eval())
-    # omega.pexactb = -omega.pexactd - omega.Q * omega.eib / (4 * omega.pi * omega.k[0][0] * omega.H)
+    ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval()) #exponential integral van -10x tot -12x
+    pex = (omega.p0 + (omega.Q * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    # pex = (omega.p0 + omega.Q * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    print("analytical term", (omega.Q / (4 * omega.pi * omega.k[0][0] * H)).eval())
+    print("ei term", ei)
 
-    # pex = omega.pexact.eval().reshape(-1)
     return pex
 
-def ppostprocess2(omega, time, pex):
+def panalyticalbuildup(omega, time, pex):
     omega = omega.copy_()
-    omega.eta = omega.φ * omega.ct / omega.k[0][0]
-    omega.pei = sc.expi((-omega.φ * omega.ct * omega.rw**2 / (4 * math.pi * omega.k[0][0] * time)).eval())
-    pex2 = (pex + omega.Q * omega.pei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
+
+    ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval())
+    pex2 = (pex - (omega.Q * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     return pex2
 
-def Tpostprocess(omega, time):
-    constantjt = -1.478e-7
-
+def Tanalyticaldrawdown(omega, time):
     omega = omega.copy_()
+    constantjt = -1.478e-7
+    phieff = omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf))
+
     omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
 
     omega.Tei = sc.expi((-omega.eta/(4*time) - ( omega.cs * omega.Q * omega.eta) / (4 * math.pi * omega.H)).eval())
     Tex = (omega.T0 + constantjt * omega.Q * -sc.expi((-omega.eta/(4*time)).eval()) / (4 * omega.pi * omega.k[0][0] * omega.H) +
-           (omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf)) - constantjt ) * omega.Tei
+           (phieff - constantjt ) * omega.Tei
            ).eval()
 
     return Tex
 
-def Tpostprocess2(omega, time, Tex):
-    constantjt = -1.478e-7
-
+def Tanalyticalbuildup(omega, time, Tex):
     omega = omega.copy_()
+    constantjt = -1.478e-7
+    phieff = omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf))
+
     omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
 
-    omega.Tei = sc.expi((-omega.eta/(4*time) - ( omega.cs * omega.Q * omega.eta) / (4 * math.pi * omega.H)).eval())
-    Tex2 = (Tex - constantjt * omega.Q * -sc.expi((-omega.eta/(4*time)).eval()) / (4 * omega.pi * omega.k[0][0] * omega.H) +
-           (omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf)) - constantjt ) * omega.Tei
-           ).eval()
+    latetime = 360
+
+    if (time < latetime):
+        #early-time buildup solution
+        slope = 0.183234 * omega.Q * phieff / (omega.k[0][0] * omega.H)
+        omega.Tei = sc.expi((-omega.eta / (4 * time)).eval())
+        Tex2 = Tex + (slope * omega.Tei).eval()
+
+    else:
+        #late-time buildup solution
+        slope = 0.183234 * omega.Q * constantjt / (omega.k[0][0] * omega.H)
+        Tex2 = 1
 
     return Tex2
 
