@@ -91,7 +91,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Target exterior radius of influence.
        newtontol [1e-1]
          Newton tolerance.
-       endtime [270]
+       endtime [2700]
          Stopping time.
     '''
 # degree = 2
@@ -175,6 +175,10 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = 1/(omega.mu)*np.diag(k_int)
     omega.uw = omega.Q / (2 * math.pi * rw * H)
+    # omega.Qw = omega.Q / ( 2 * math.pi * rw)
+    omega.Vw = math.pi * rw**2 * omega.H
+    omega.Qw = omega.Q / omega.Vw
+    # omega.uw = omega.Qw
     omega.λ = omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
@@ -459,9 +463,9 @@ def panalyticaldrawdown(omega, time):
     omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
 
     ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval()) #exponential integral van -10x tot -12x
-    pex = (omega.p0 + (omega.Q * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
-    # pex = (omega.p0 + omega.Q * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
-    print("analytical term", (omega.Q / (4 * omega.pi * omega.k[0][0] * H)).eval())
+    pex = (omega.p0 + (omega.Qw * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    # pex = (omega.p0 + omega.Qw * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    print("analytical term", (omega.Qw / (4 * omega.pi * omega.k[0][0] * omega.H)).eval())
     print("ei term", ei)
 
     return pex
@@ -471,7 +475,7 @@ def panalyticalbuildup(omega, time, pex):
     omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
 
     ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval())
-    pex2 = (pex - (omega.Q * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    pex2 = (pex - (omega.Qw * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     return pex2
 
@@ -482,8 +486,8 @@ def Tanalyticaldrawdown(omega, time):
 
     omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
 
-    omega.Tei = sc.expi((-omega.eta/(4*time) - ( omega.cs * omega.Q * omega.eta) / (4 * math.pi * omega.H)).eval())
-    Tex = (omega.T0 + constantjt * omega.Q * -sc.expi((-omega.eta/(4*time)).eval()) / (4 * omega.pi * omega.k[0][0] * omega.H) +
+    omega.Tei = sc.expi((-omega.eta/(4*time) - ( omega.cs * omega.Qw * omega.eta) / (4 * math.pi * omega.H)).eval())
+    Tex = (omega.T0 + constantjt * omega.Qw * -sc.expi((-omega.eta/(4*time)).eval()) / (4 * omega.pi * omega.k[0][0] * omega.H) +
            (phieff - constantjt ) * omega.Tei
            ).eval()
 
@@ -500,13 +504,13 @@ def Tanalyticalbuildup(omega, time, Tex):
 
     if (time < latetime):
         #early-time buildup solution
-        slope = 0.183234 * omega.Q * phieff / (omega.k[0][0] * omega.H)
+        slope = 0.183234 * omega.Qw * phieff / (omega.k[0][0] * omega.H)
         omega.Tei = sc.expi((-omega.eta / (4 * time)).eval())
         Tex2 = Tex + (slope * omega.Tei).eval()
 
     else:
         #late-time buildup solution
-        slope = 0.183234 * omega.Q * constantjt / (omega.k[0][0] * omega.H)
+        slope = 0.183234 * omega.Qw * constantjt / (omega.k[0][0] * omega.H)
         Tex2 = 1
 
     return Tex2
