@@ -91,7 +91,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Target exterior radius of influence.
        newtontol [1e-1]
          Newton tolerance.
-       endtime [2700]
+       endtime [270]
          Stopping time.
     '''
 # degree = 2
@@ -132,24 +132,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.p = 'pbasis_n ?lhsp_n'
     omega.T = 'Tbasis_n ?lhsT_n'
 
-    # # define custom nutils function
-    # class MyEval(function.evaluable):
-    #     t1 = 50
-    #     t2 = 100
-    #     Qd = -0.01
-    #     Qb = 0.01
-    #
-    #     @staticmethod
-    #     def evalf(t):
-    #         """ Volumetric flow rate function Q(t | 0, t1, t2)."""
-    #         return np.piecewise(t, [(t < 0) | (t > t2),
-    #                                 (t >= 0) & (t < t1),
-    #                                 (t >= t1) & (t <= t2)],
-    #                             [lambda t: 0., lambda t: Qd, lambda t: Qb])
-    #
-    #     # add to the namespace
-    # omega.MyEval = MyEval(omega.t)
-
     omega.Q = 0.07
 
     omega.p0 = 222.5e5
@@ -174,11 +156,9 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     k_int_x = 1e-13 #aquifer.K
     k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = 1/(omega.mu)*np.diag(k_int)
-    omega.uw = omega.Q / (2 * math.pi * rw * H)
-    # omega.Qw = omega.Q / ( 2 * math.pi * rw)
     omega.Vw = math.pi * rw**2 * omega.H
+    omega.uw = omega.Q / (2 * math.pi * rw * H)
     omega.Qw = omega.Q / omega.Vw
-    # omega.uw = omega.Qw
     omega.λ = omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
@@ -462,11 +442,8 @@ def panalyticaldrawdown(omega, time):
     omega = omega.copy_()
     omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
 
-    ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval()) #exponential integral van -10x tot -12x
-    pex = (omega.p0 + (omega.Qw * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
-    # pex = (omega.p0 + omega.Qw * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
-    print("analytical term", (omega.Qw / (4 * omega.pi * omega.k[0][0] * omega.H)).eval())
-    print("ei term", ei)
+    ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval())
+    pex = (omega.p0 + omega.Qw * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     return pex
 
