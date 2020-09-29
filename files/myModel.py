@@ -7,6 +7,7 @@ import vtk
 import scipy.special as sc
 import matplotlib.tri as tri
 import pandas as pd
+from CoolProp.CoolProp import PropsSI
 from scipy import stats
 
 from myIOlib import *
@@ -91,7 +92,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
          Target exterior radius of influence.
        newtontol [1e-1]
          Newton tolerance.
-       endtime [270]
+       endtime [300]
          Stopping time.
     '''
 # degree = 2
@@ -103,7 +104,6 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
     N = round((endtime / timestep))+1
     timeperiod = timestep * np.linspace(0, 2*N, 2*N)
-    halftime = endtime/2
 
     rw = 0.1
     rmax = maxradius
@@ -139,6 +139,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.cf = 4200 #aquifer.Cp_f [J/kg K]
     omega.cs = 2650 #870 #aquifer.Cp_f [J/kg K]
     omega.ρf = 1000 #aquifer.rho_f
+    # omega.ρf = PropsSI('D', 'T', omega.T.eval(), 'P', omega.p.eval(), 'IF97::Water')
     omega.ρs = 2400 #aquifer.rho_s
     omega.λf = 0.663 #aquifer.labda_l
     omega.λs = 4.2 #aquifer.labda_s
@@ -149,16 +150,17 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     omega.rw = rw
     omega.rmax = rmax
     omega.mu = 3.1e-4 #aquifer.mu
+    # omega.mu = PropsSI('V', 'T', omega.T.eval(), 'P', omega.p.eval(), 'IF97::Water')
     omega.φ = 0.2 #aquifer.porosity
-    c_φ = 0#1e-8
-    c_f = 5e-10
-    omega.ct = c_φ + c_f
+    omega.ctφ = 1e-9
+    omega.ctf = 5e-10
+    omega.ct = omega.ctφ + omega.ctf
     k_int_x = 1e-13 #aquifer.K
     k_int = (k_int_x, k_int_x, k_int_x)
     omega.k = 1/(omega.mu)*np.diag(k_int)
     omega.Vw = math.pi * rw**2 * omega.H
     omega.uw = omega.Q / (2 * math.pi * rw * H)
-    omega.Qw = omega.Q / omega.Vw
+    omega.Qw = omega.Q
     omega.λ = omega.λs
     omega.ρ = omega.φ * omega.ρf + (1 - omega.φ) * omega.ρs
     omega.cp = omega.φ * omega.cf + (1 - omega.φ) * omega.cs
@@ -173,6 +175,11 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     parrayexp = np.empty(2*N)
     Tarrayexp = np.empty(2*N)
 
+    # introduce temperature dependent variables
+    omega.ρf = 1000 * (1 - 3.17e-4 * (omega.T - 298.15) - 2.56e-6 * (omega.T - 298.15)**2)
+    # omega.cf = 4187.6 * (-922.47 + 2839.5 * (omega.T / omega.Tatm) - 1800.7 * (omega.T / omega.Tatm)**2 + 525.77*(omega.T / omega.Tatm)**3 - 73.44*(omega.T / omega.Tatm)**4)
+    # omega.cf = 3.3774 - 1.12665e-2 * omega.T + 1.34687e-5 * omega.T**2 # if temperature above T=100 [K]
+
     # define initial state
     sqr = topo.integral('(p - p0) (p - p0)' @ omega, degree=degree*2) # set initial pressure p(x,y,z,0) = p0
     pdofs0 = solver.optimize('lhsp', sqr, droptol=1e-15)
@@ -186,7 +193,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     # resp += topo.boundary['strata'].integral('(pbasis_n ρf q_i n_i) d:x' @ omega, degree=degree*4)
     resp -= topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
     resp2 = resp +topo.boundary['inner'].integral('pbasis_n ρf uw d:x' @ omega, degree=degree*4)
-    pinertia = -topo.integral('ρf φ ct pbasis_n p d:x' @ omega, degree=degree*4)
+    pinertia = -topo.integral('ρf φ ctf pbasis_n p d:x' @ omega, degree=degree*4)
 
     # lhspd = solver.solve_linear('lhsp', resp, constrain=consp)
 
@@ -199,7 +206,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
     consT = solver.optimize('lhsT', sqrT, droptol=1e-15)
 
     # formulate thermo process
-    resT = topo.integral('(ρf cf Tbasis_n (u_k T)_,k ) d:x' @ omega, degree=degree * 2)
+    resT = topo.integral('(ρf cf Tbasis_n (u_i T)_,i) d:x' @ omega, degree=degree * 2) #(u_k T)_,k
     resT += topo.integral('Tbasis_n,i (- λ) T_,i d:x' @ omega, degree=degree * 2)
     resT -= topo.boundary['strata'].integral('(Tbasis_n T_,i n_i) d:x' @ omega, degree=degree*4)
     resT -= topo.boundary['inner'].integral('Tbasis_n ρf uw cf T_,i n_i d:x' @ omega, degree=degree*4)
@@ -265,6 +272,7 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
             print("well temperature ", Tarraywell[istep])
             print("exact well temperature", Tex)
+            print("data well temperature", Tarrayexp[istep])
 
             if time >= endtime:
 
@@ -355,15 +363,17 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
             print(get_welldata("PRESSURE")[213+istep]/10)
             parrayexp[N+istep] = get_welldata("PRESSURE")[212+istep]/10
 
-            print("well pressure ", parraywell[istep])
+            print("well pressure ", parraywell[N+istep])
             print("exact well pressure", pex2)
+            print("data well pressure", parrayexp[N+istep])
 
             Tarraywell[N+istep] = T.take(bezier.tri.T, 0)[1][0]
             Tarrayexact[N+istep] = Tex2
             Tarrayexp[N+istep] = get_welldata("TEMPERATURE")[212+istep]+273
 
-            print("well temperature ", Tarraywell[istep])
+            print("well temperature ", Tarraywell[N+istep])
             print("exact well temperature", Tex2)
+            print("data well temperature", Tarrayexp[N+istep])
 
             if time >= endtime:
 
@@ -440,19 +450,19 @@ def main(degree:int, btype:str, timestep:float, timescale:float, maxradius:float
 
 def panalyticaldrawdown(omega, time):
     omega = omega.copy_()
-    omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
+    omega.eta = omega.k[0][0] / (omega.φ * omega.ctf)
 
-    ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval())
-    pex = (omega.p0 + omega.Qw * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    ei = sc.expi((-omega.rw**2 / (4 * omega.eta * time)).eval())
+    pex = (omega.p0 + (omega.Qw/omega.Vw) * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     return pex
 
 def panalyticalbuildup(omega, time, pex):
     omega = omega.copy_()
-    omega.eta = (omega.φ * omega.ct) / omega.k[0][0]
+    omega.eta = omega.k[0][0] / (omega.φ * omega.ctf)
 
-    ei = sc.expi((-omega.eta * omega.rw**2 / (4 * time)).eval())
-    pex2 = (pex - (omega.Qw * ei) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
+    ei = sc.expi((-omega.rw**2 / (4 * omega.eta * time)).eval())
+    pex2 = (pex - (omega.Qw/omega.Vw)* ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     return pex2
 
@@ -461,12 +471,13 @@ def Tanalyticaldrawdown(omega, time):
     constantjt = -1.478e-7
     phieff = omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf))
 
-    omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
+    omega.eta = omega.k[0][0] / (omega.φ * omega.ct)
+    aconstant = ( omega.cs * omega.Qw) / (4 * math.pi * omega.eta * omega.H)
+    ei = sc.expi((-omega.rw**2 / (4 * omega.eta * time)).eval())
+    pressuredif = ((-omega.Qw/omega.Vw) * ei / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
-    omega.Tei = sc.expi((-omega.eta/(4*time) - ( omega.cs * omega.Qw * omega.eta) / (4 * math.pi * omega.H)).eval())
-    Tex = (omega.T0 + constantjt * omega.Qw * -sc.expi((-omega.eta/(4*time)).eval()) / (4 * omega.pi * omega.k[0][0] * omega.H) +
-           (phieff - constantjt ) * omega.Tei
-           ).eval()
+    omega.Tei = sc.expi((-omega.rw**2/(4*omega.eta*time) - aconstant).eval())
+    Tex = (omega.T0 - (constantjt * pressuredif) + (omega.Qw/omega.Vw) / (4 * omega.pi * omega.k[0][0] * omega.H) * (phieff - constantjt ) * omega.Tei).eval()
 
     return Tex
 
@@ -475,20 +486,21 @@ def Tanalyticalbuildup(omega, time, Tex):
     constantjt = -1.478e-7
     phieff = omega.φ * (omega.ρf * omega.cf) / (omega.ρ * omega.cp) * (constantjt + 1/(omega.ρf * omega.cf))
 
-    omega.eta = omega.φ * omega.ct * omega.rw**2 / ( omega.k[0][0])
+    omega.eta = omega.k[0][0] / (omega.φ * omega.ct)
 
     latetime = 360
 
     if (time < latetime):
         #early-time buildup solution
-        slope = 0.183234 * omega.Qw * phieff / (omega.k[0][0] * omega.H)
-        omega.Tei = sc.expi((-omega.eta / (4 * time)).eval())
-        Tex2 = Tex + (slope * omega.Tei).eval()
+
+        earlyTei = sc.expi((-omega.rw ** 2 / (4 * omega.eta * time)).eval())
+        Tex2 = Tex - (earlyTei * phieff * (omega.Qw/omega.Vw) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     else:
         #late-time buildup solution
-        slope = 0.183234 * omega.Qw * constantjt / (omega.k[0][0] * omega.H)
-        Tex2 = 1
+        lateTei  = sc.expi((-omega.rw**2 * omega.cp * omega.ρ / (4 * omega.λ * time)).eval())
+
+        Tex2 = Tex - (lateTei * constantjt * (omega.Qw/omega.Vw) / (4 * omega.pi * omega.k[0][0] * omega.H)).eval()
 
     return Tex2
 
