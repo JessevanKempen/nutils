@@ -4,7 +4,7 @@ from scipy.stats import lognorm
 from scipy import stats
 import math
 import pandas as pd
-# import seaborn as sns
+import seaborn as sns
 
 # fig, ax = plt.subplots(2)
 
@@ -35,20 +35,23 @@ import pandas as pd
 # porosity = (( permeability * S0_sand**2 ) / (constant) )**(1/tothepower)
 
 def get_samples_porosity(size):
-    distributionPorosity = stats.lognorm(s=0.24, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
+    # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
+    distributionPorosity = stats.lognorm(scale=0.2, s=0.5)
     samplesPorosity = distributionPorosity.rvs(size=size)
 
     return samplesPorosity
 
 def get_samples_permeability(porosity, size):
-    constant = np.random.uniform(low=3.5, high=5.8, size=size)
+    constant = np.random.uniform(low=10, high=100, size=size) #np.random.uniform(low=3.5, high=5.8, size=size)
+    tau = np.random.uniform(low=0.3, high=0.5, size=size)
     tothepower = np.random.uniform(low=3, high=5, size=size)
-    S0_sand = np.random.uniform(low=1.5e2, high=2.2e2, size=size)  # specific surface area [1/cm]
+    rc = np.random.uniform(low=10e-6, high=30e-6, size=size)
+    SSA = 3/rc  #4 pi R**2 / (4/3) pi R**3
 
-    permeability = constant * ( porosity** tothepower / S0_sand ** 2 )
+    permeability = constant * tau**2 * ( porosity** tothepower / SSA ** 2 )
     mu_per = np.mean(permeability)
     stddv_per = np.var(permeability) ** 0.5
-    permeability_dis = stats.lognorm(scale=mu_per, s=1)
+    permeability_dis = stats.lognorm(scale=mu_per, s=0.5)
     samplesPermeability = permeability_dis.rvs(size=size)
 
     return samplesPermeability
@@ -68,6 +71,10 @@ def plot_samples_permeability(distributionPermeability):
     # ax[0].set_xscale('log')
     # ax[1].set_xscale('log')
     plt.show()
+
+# N=50
+# porosity = get_samples_porosity(N)
+# permeability = get_samples_permeability(porosity, N)
 
 # x2 = np.linspace(0, 1, 100)
 # bin_centers2 = 0.5*(x2[1:] + x2[:-1])
@@ -124,4 +131,35 @@ def plot_samples_permeability(distributionPermeability):
 # sns.rugplot(df.Permeability, color="g", ax=ax)
 # sns.rugplot(df.Porosity, vertical=True, ax=ax);
 #
+
+## Using map() and lambda
+def listOfTuples(l1, l2):
+      return list(map(lambda x, y: (x, y), l1, l2))
+
+import plotly.figure_factory as ff
+import plotly.express as px
+N=500
+porosity = get_samples_porosity(N)
+permeability = get_samples_permeability(porosity, N)
+
+df = pd.DataFrame(listOfTuples(permeability, porosity), columns=["Permeability", "Porosity"])
+
+# fig = px.histogram(df, x="Permeability", y="Porosity",
+#                    marginal="box",  # or violin, rug
+#                    hover_data=df.columns)
+# fig.show()
+
+f, ax = plt.subplots(figsize=(6, 6))
+# sns.jointplot(x="Permeability", y="Porosity", ax=ax, data=df, kind="kde", n_levels=10);
+
+# # plot waaier
+# sns.lineplot(
+#     data=fmri, x="timepoint", y="signal", hue="event", err_style="bars", ci=95
+# )
+
+sns.kdeplot(df.Permeability, df.Porosity, n_levels=10, ax=ax)
+sns.rugplot(df.Permeability, color="g", ax=ax)
+sns.rugplot(df.Porosity, vertical=True, ax=ax)
+ax.set(xscale="log", xlabel='K [m^2]', ylabel='φ [-]')
+plt.show()
 # plt.show()

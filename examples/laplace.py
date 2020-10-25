@@ -4,13 +4,13 @@
 # square domain :math:`Ω` with boundary :math:`Γ`, subject to boundary
 # conditions:
 #
-# .. math:: u &= 0                     && Γ_{\rm left}
+# .. math:: u &= 0                     && Γ_{\rm left} dirichlet homogeneous
 #
-#       ∂_n u &= 0                     && Γ_{\rm bottom}
+#       ∂_n u &= 0                     && Γ_{\rm bottom} neumann homogeneous
 #
-#       ∂_n u &= \cos(1) \cosh(x_1)    && Γ_{\rm right}
+#       ∂_n u &= \cos(1) \cosh(x_1)    && Γ_{\rm right} neumann heterogeneous
 #
-#           u &= \cosh(1) \sin(x_0)    && Γ_{\rm top}
+#           u &= \cosh(1) \sin(x_0)    && Γ_{\rm top} dirichlet heterogeneous
 #
 # This case is constructed to contain all combinations of homogenous and
 # heterogeneous, Dirichlet and Neumann type boundary conditions, as well as to
@@ -69,6 +69,7 @@ def main(nelems:int, etype:str, btype:str, degree:int):
 
   res = domain.integral('d(basis_n, x_i) d(u, x_i) d:x' @ ns, degree=degree*2)
   res -= domain.boundary['right'].integral('basis_n cos(1) cosh(x_1) d:x' @ ns, degree=degree*2)
+  #       ∂_n u &= \cos(1) \cosh(x_1)    && Γ_{\rm right} neumann heterogeneous
 
   # The Dirichlet constraints are set by finding the coefficients that minimize
   # the error:
