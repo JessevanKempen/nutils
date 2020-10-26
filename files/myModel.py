@@ -119,7 +119,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [30s]
          Time step.
 
-       endtime [300s]
+       endtime [150s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
@@ -181,13 +181,14 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     # ns.u_i = 'q_i / φ '         # [m/s]
     ns.T0 = 88.33+273           # [K]
 
-    ###########################
-    # Solve by implicit euler #
-    ###########################
-
     # total system (rock + fluid) variable
     ns.ρ = ns.φ * ns.ρf + (1 - ns.φ) * ns.ρs
     ns.cp = ns.φ * ns.cf + (1 - ns.φ) * ns.cs
+
+
+    ###########################
+    # Solve by implicit euler #
+    ###########################
     #
     # # introduce temperature dependent variables
     # # ns.ρf = 1000 * (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)
@@ -307,13 +308,11 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ns.q_i = '-(  k  / mu ) p_,i'
             ns.qh_i = '-λ T_,i'
             ns.v = 'Q / Aw'
-            # ns.hf = '( ρf cf ) T_,i'
             ns.pref = 225e5
             ns.Tref = 90 + 273  # [K]
 
             psqr = topo.boundary['outer'].integral('( (p - pref)^2 ) d:x' @ ns, degree=2)  # farfield pressure
             pcons = solver.optimize('plhs', psqr, droptol=1e-15)
-            print(pcons)
 
             Tsqr = topo.boundary['outer'].integral('( (T - Tref)^2 ) d:x' @ ns, degree=2)  # farfield temperature
             Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
@@ -323,9 +322,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 Tsqr = topo.integral('( (T - Tref)^2) d:x' @ ns, degree=2)
                 plhs0 = solver.optimize('plhs', psqr, droptol=1e-15)
                 Tlhs0 = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
-                print("here enter istep 0")
             else:
-                print("here enter")
                 psqr = topo.integral('( (p - pref)^2) d:x' @ ns, degree=2)
                 Tsqr = topo.integral('( (T - Tref)^2) d:x' @ ns, degree=2)
                 plhs0new = solver.optimize('plhs', psqr, droptol=1e-15)
@@ -336,37 +333,33 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 Tlhs0new[:len(Tlhs0)] = Tlhs0
                 plhs0 = plhs0new.copy()
                 Tlhs0 = Tlhs0new.copy()
-                print("test 2")
 
             pres = -topo.integral('pbasis_n,i q_i d:x' @ ns, degree=6)  # convection term darcy
             pres -= topo.boundary['strata, inner'].integral('(pbasis_n q_i n_i) d:x' @ ns, degree=degree * 3)
 
-            Tres = topo.integral('(-Tbasis_n ρf cf (q_i T)_,i) d:x' @ ns, degree=degree * 2)
-            Tres += topo.integral('(-Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2)
+            Tres = topo.integral('(Tbasis_n φ ρf cf (q_k T)_,k) d:x' @ ns, degree=degree * 2) #5K fluid flow in pore space
+            Tres -= topo.integral('(Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2)
 
             if istep > 0:
                 pres += topo.integral('pbasis_n (φ ct) δp d:x' @ ns, degree=degree * 3)  # storativity aquifer
                 pres += topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
 
-                Tres += topo.integral('Tbasis_n (ρf cf) δT d:x' @ ns, degree=degree * 3) #heat storage aquifer
-                Tres += topo.boundary['inner'].integral('Tbasis_n v ( ρf cf ) T_,i n_i d:x' @ ns, degree=degree*4) # energy advection well
+                Tres += topo.integral('Tbasis_n (ρ cp) δT d:x' @ ns, degree=degree * 3) #heat storage aquifer
+                Tres -= topo.boundary['inner'].integral('Tbasis_n v ( ρf cf ) T_,i n_i d:x' @ ns, degree=degree*4) # energy advection well
 
             if istep > N:
                 pres -= topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
-                Tres -= topo.boundary['inner'].integral('Tbasis_n v ( ρf cf ) T_,i n_i d:x' @ ns, degree=degree * 4)  # energy advection well
+                Tres += topo.boundary['inner'].integral('Tbasis_n v ( ρf cf ) T_,i n_i d:x' @ ns, degree=degree * 4)  # energy advection well
 
             plhs = solver.solve_linear('plhs', pres, constrain=pcons, arguments={'plhs0': plhs0})
-            print("linear p", plhs)
 
             Tlhs = solver.solve_linear('Tlhs', Tres, constrain=Tcons, arguments={'plhs': plhs, 'Tlhs0': Tlhs0})
 
             q_inti = topo.boundary['inner'].integral('(q_i n_i) d:x' @ ns, degree=6)
             q = q_inti.eval(plhs=plhs)
 
-            print("check if it is in eval")
             qh_inti = topo.boundary['inner'].integral('(qh_i n_i) d:x' @ ns, degree=6)
-            qh = qh_inti.eval(Tlhs=Tlhs, Tlhs0=Tlhs0)
-            print("it is in Tlhs=Tlhs")
+            qh = qh_inti.eval(Tlhs=Tlhs)
 
             print("the fluid flux in the FEA simulated:", q, "the flux that you want to impose:", (ns.v).eval())
             print("the heat flux in the FEA simulated:", qh, "the flux that you want to impose:", (ns.v).eval())
@@ -378,12 +371,11 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ###########################
 
             bezier = plottopo.sample('bezier', 7)
-            print(Tlhs)
-            T = bezier.eval(['T'] @ ns, Tlhs=Tlhs)
-            print("T test", T)
 
             x, q, p = bezier.eval(['x_i', 'q_i', 'p'] @ ns, plhs=plhs)
 
+            T = bezier.eval(['T'] @ ns, Tlhs=Tlhs)
+            TT = T[0]
 
             t1 = time
             t2 = time - endtime
@@ -394,9 +386,9 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 Qarray[istep] = Q
                 parrayexact[istep] = pex
 
-                # Tex = Tanalyticaldrawdown(ns, t1, ns.rw)
-                # Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
-                # Tarrayexact[istep] = Tex
+                Tex = Tanalyticaldrawdown(ns, t1, ns.rw)
+                Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
+                Tarrayexact[istep] = Tex
 
                 with export.mplfigure('pressure1d.png', dpi=800) as plt:
                     ax = plt.subplots()
@@ -410,7 +402,19 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                             np.array(panalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0][::100]/1e6,
                             label="analytical")
                     ax.legend(loc="center right")
+                #
+                with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                    nanjoin = lambda array, tri: np.insert(array.take(tri.flat, 0).astype(float),
+                                                           slice(tri.shape[1], tri.size, tri.shape[1]), np.nan,
+                                                           axis=0)
+                    ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(TT, bezier.tri)[::100], label="FEM")
+                    ax.plot(nanjoin(x[:, 0], bezier.tri)[::100],
+                            np.array(Tanalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0][::100],
+                            label="analytical")
 
+                    ax.legend(loc="center right")
 
 
             else:
@@ -459,26 +463,26 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                                                    alpha=0.2))
                     fig.colorbar(im)
 
-                # with export.mplfigure('temperature.png', dpi=800) as fig:
-                #     ax = fig.add_subplot(111, title='temperature', aspect=1)
-                #     ax.autoscale(enable=True, axis='both', tight=True)
-                #     im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, T, shading='gouraud', cmap='jet')
-                #     ax.add_collection(
-                #         collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k', linewidths=0.2,
-                #                                    alpha=0.2))
-                #     fig.colorbar(im)
-                #
-                # with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                #     ax = plt.subplots()
-                #     ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                #     nanjoin = lambda array, tri: np.insert(array.take(tri.flat, 0).astype(float),
-                #                                            slice(tri.shape[1], tri.size, tri.shape[1]), np.nan,
-                #                                            axis=0)
-                #     ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(T, bezier.tri)[::100], label="FEM")
-                #     ax.plot(nanjoin(x[:, 0], bezier.tri)[::100],
-                #             np.array(Tanalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0][::100],
-                #             label="analytical")
-                #     ax.legend(loc="center right")
+                with export.mplfigure('temperature.png', dpi=800) as fig:
+                    ax = fig.add_subplot(111, title='temperature', aspect=1)
+                    ax.autoscale(enable=True, axis='both', tight=True)
+                    im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, TT, shading='gouraud', cmap='jet')
+                    ax.add_collection(
+                        collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k', linewidths=0.2,
+                                                   alpha=0.2))
+                    fig.colorbar(im)
+
+                with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                    ax = plt.subplots()
+                    ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                    nanjoin = lambda array, tri: np.insert(array.take(tri.flat, 0).astype(float),
+                                                           slice(tri.shape[1], tri.size, tri.shape[1]), np.nan,
+                                                           axis=0)
+                    ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(TT, bezier.tri)[::100], label="FEM")
+                    ax.plot(nanjoin(x[:, 0], bezier.tri)[::100],
+                            np.array(Tanalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0][::100],
+                            label="analytical")
+                    ax.legend(loc="center right")
 
                 with export.mplfigure('pressuretime.png', dpi=800) as plt:
                     ax1 = plt.subplots()
@@ -492,16 +496,16 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                     ax1.legend(loc="center right")
                     ax2.plot(timeperiod, Qarray, 'k')
 
-                # with export.mplfigure('temperaturetime.png', dpi=800) as plt:
-                #     ax1 = plt.subplots()
-                #     ax2 = ax1.twinx()
-                #     ax1.set(xlabel='Time [s]')
-                #     ax1.set_ylabel('Temperature [K]', color='b')
-                #     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
-                #     ax1.plot(timeperiod, Tarraywell, 'ro', label="FEM")
-                #     ax1.plot(timeperiod, Tarrayexact, label="analytical")
-                #     ax1.legend(loc="center right")
-                #     ax2.plot(timeperiod, Qarray, 'k')
+                with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+                    ax1 = plt.subplots()
+                    ax2 = ax1.twinx()
+                    ax1.set(xlabel='Time [s]')
+                    ax1.set_ylabel('Temperature [K]', color='b')
+                    ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
+                    ax1.plot(timeperiod, Tarraywell, 'ro', label="FEM")
+                    ax1.plot(timeperiod, Tarrayexact, label="analytical")
+                    ax1.legend(loc="center right")
+                    ax2.plot(timeperiod, Qarray, 'k')
 
                 # mesh
                 bezier = plottopo.sample('bezier', 2)
@@ -735,9 +739,9 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
 def panalyticaldrawdown(ns, t1, R):
     ns = ns.copy_()
     ns.eta = ns.K / (ns.φ * ns.ct)
-
     ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
     pdifference = (ns.Jw * ei / (4 * math.pi * ns.K)).eval()
+
     pex = (ns.pref + pdifference).eval()
     return pex
 
@@ -764,8 +768,8 @@ def Tanalyticaldrawdown(ns, t1, R):
     ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
     pressuredif = (-ns.Jw * ei / (4 * math.pi * ns.K)).eval()
 
-    ns.Tei = sc.expi((-R**2/(4*ns.eta*t1) - aconstant).eval())
-    Tex = (ns.T0 - (constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (phieff - constantjt ) * ns.Tei).eval()
+    Tei = sc.expi((-R**2/(4*ns.eta*t1) - aconstant).eval())
+    Tex = (ns.Tref - (constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (phieff - constantjt ) * Tei).eval()
 
     return Tex
 
