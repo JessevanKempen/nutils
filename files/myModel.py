@@ -66,22 +66,6 @@ print("Constructing the FE model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
 
-def RefineBySDF(topo, radius, sdf, nrefine):
-    refined_topo = topo
-    for n in range(nrefine):
-        elems_to_refine = []
-        k = 0
-        bez = refined_topo.sample('bezier',2)
-        sd = bez.eval(sdf)
-        sd = sd.reshape( [len(sd)//4, 4] )
-        for i in range(len(sd)):
-            if any(sd[i,:] == radius.eval()):
-                elems_to_refine.append(k)
-            k = k + 1
-        refined_topo = refined_topo.refined_by(refined_topo.transforms[np.array(elems_to_refine)])
-
-    return refined_topo
-
 def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], endtime:unit['s']):
     '''
     Fluid flow in porous media.
@@ -94,13 +78,13 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        btype [spline]
          Type of basis function (std/spline).
 
-       elems [50]
+       elems [40]
          Number of elements.
 
        rw [0.1m]
          Well radius.
 
-       rmax [250m]
+       rmax [1000m]
          Far field radius of influence.
 
        H [100m]
@@ -124,7 +108,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [60s]
          Time step.
 
-       endtime [600s]
+       endtime [180s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
@@ -167,8 +151,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     ns.ρs = 2400                # [kg/m^3]       # aquifer.rho_s
     ns.λf = 0.663               # [W/mk]         # aquifer.labda_l
     ns.λs = 4.2                 # [W/mk]         # aquifer.labda_s
-    # ns.λ = ns.λs                # [W/mK] #note to self: use water+solid thermal conductivity or only solid thermal conductivity?
-    ns.g = 9.81                 # [m/s^2]        # aquifer.g            # ns.g_j = '<0, 0, 0>_j'
+    ns.g = 9.81                 # [m/s^2]        # aquifer.g            # ns.ge_i = '<0,-g, 0>_i'
     ns.H = H                    # [m]
     ns.rw = rw                  # [m]
     ns.rmax = rmax              # [m]
@@ -182,7 +165,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     ns.uw = 'Q / Aw'
     ns.K = k_int / mu
     # ns.K = np.diag(k_int) / (ns.mu)  # [m/s] *[1/rho g]
-    # ns.q_i = '-K p_,i'      # ns.q_i = '-K_ij (p_,j)' # - ρf g x_1,j)' #[s * Pa* 1/m] = [Pa*s/m] #note to self: check if you formulated the gravity term as you intented
+    # ns.q_i = '-K_ij (p_,j - ρf ge_i,j)' #[s * Pa* 1/m] = [Pa*s/m] ρf g x_1,j
     # ns.u_i = 'q_i / φ '         # [m/s]
     ns.T0 = 88.33+273           # [K]
 
@@ -299,99 +282,90 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
 
             # define problem
             ns.Δt = timestep
-            ns.p = 'pbasis_n ?plhs_n'
+            ns.p  = 'pbasis_n ?plhs_n'
             ns.p0 = 'pbasis_n ?plhs0_n'
             ns.δp = '(p - p0) / Δt'
-            ns.T = 'Tbasis_n ?Tlhs_n'
+            ns.T  = 'Tbasis_n ?Tlhs_n'
             ns.T0 = 'Tbasis_n ?Tlhs0_n'
             ns.δT = '(T - T0) / Δt'
-            ns.k = k_int
+            ns.k  = k_int
             ns.mu = mu
-            ns.q_i = '-(  k  / mu ) p_,i'
+            ns.q_i  = '-(  k  / mu ) p_,i'
             ns.qh_i = '-λ T_,i'
-            ns.v = 'Q / Aw'
-            ns.pref = 225e5
+            ns.v    = 'Q / Aw'
+            ns.alpha= '(ρf cf) / (ρ cp)'
+            ns.pref = 225e5     # [Pa]
             ns.Tref = 90 + 273  # [K]
 
             psqr = topo.boundary['outer'].integral('( (p - pref)^2 ) d:x' @ ns, degree=2)  # farfield pressure
             pcons = solver.optimize('plhs', psqr, droptol=1e-15)
-
-            # Tsqr = topo.boundary['outer'].integral('( (T - Tref)^2 ) d:x' @ ns, degree=2)  # farfield temperature
-            # Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
+            Tsqr = topo.boundary['outer'].integral('( (T - Tref)^2 ) d:x' @ ns, degree=2)  # farfield temperature
+            Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
 
             if istep == 0:
                 psqr = topo.integral('( (p - pref)^2 ) d:x' @ ns, degree=2)
-                # Tsqr = topo.integral('( (T - Tref)^2) d:x' @ ns, degree=2)
+                Tsqr = topo.integral('( (T - Tref)^2) d:x' @ ns, degree=2)
                 plhs0 = solver.optimize('plhs', psqr, droptol=1e-15)
-                # Tlhs0 = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
+                Tlhs0 = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
             else:
                 psqr = topo.integral('( (p - pref)^2) d:x' @ ns, degree=2)
-                # Tsqr = topo.integral('( (T - Tref)^2) d:x' @ ns, degree=2)
+                Tsqr = topo.integral('( (T - Tref)^2) d:x' @ ns, degree=2)
                 plhs0new = solver.optimize('plhs', psqr, droptol=1e-15)
-                # Tlhs0new = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
+                Tlhs0new = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
                 plhs0new = plhs0new.copy()
-                # Tlhs0new = Tlhs0new.copy()
+                Tlhs0new = Tlhs0new.copy()
                 plhs0new[:len(plhs0)] = plhs0
-                # Tlhs0new[:len(Tlhs0)] = Tlhs0
+                Tlhs0new[:len(Tlhs0)] = Tlhs0
                 plhs0 = plhs0new.copy()
-                # Tlhs0 = Tlhs0new.copy()
+                Tlhs0 = Tlhs0new.copy()
 
             pres = -topo.integral('pbasis_n,i q_i d:x' @ ns, degree=6)  # convection term darcy
             pres -= topo.boundary['strata, inner'].integral('(pbasis_n q_i n_i) d:x' @ ns, degree=degree * 3)
-
-            # Tres = topo.integral('(Tbasis_n φ ρf cf (q_k T)_,k) d:x' @ ns, degree=degree * 2) #φ ρf cf or ρ cp
-            # Tres -= topo.integral('(Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2)
+            Tres = topo.integral('(Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2) # diffusion term
+            Tres += topo.integral('(Tbasis_n ρ cp (q_i T)_,i) d:x' @ ns, degree=degree * 2) # convection term
 
             if istep > 0:
                 pres += topo.integral('pbasis_n (φ ct) δp d:x' @ ns, degree=degree * 3)  # storativity aquifer
                 pres += topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
+                Tres += topo.integral('Tbasis_n (ρ cp) δT d:x' @ ns, degree=degree * 3) #heat storage aquifer
+                Tres += topo.boundary['inner'].integral('Tbasis_n v alpha d:x' @ ns, degree=degree * 4)  # advection with well
 
-                # Tres += topo.integral('Tbasis_n (ρ cp) δT d:x' @ ns, degree=degree * 3) #heat storage aquifer
-                # Tres += topo.boundary['inner'].integral('Tbasis_n v ( ρ cp ) T_,i n_i d:x' @ ns, degree=degree * 4)  # advection with well
+            if istep == N:
+                ns.Td = bezier.eval(['T'] @ ns, Tlhs=Tlhs)[0][0]
+                Tsqr += topo.boundary['inner'].integral('( (T - Td)^2 ) d:x' @ ns, degree=2)
+                Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
 
             if istep > N:
                 pres -= topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
+                Tres -= topo.boundary['inner'].integral('Tbasis_n v alpha T_,i n_i d:x' @ ns, degree=degree * 4)  # advection with well
 
             plhs = solver.solve_linear('plhs', pres, constrain=pcons, arguments={'plhs0': plhs0})
-            # Tlhs = solver.solve_linear('Tlhs', Tres, constrain=Tcons, arguments={'plhs': plhs, 'Tlhs0': Tlhs0})
+            Tlhs = solver.solve_linear('Tlhs', Tres, constrain=Tcons, arguments={'plhs': plhs, 'Tlhs0': Tlhs0})
 
             q_inti = topo.boundary['inner'].integral('(q_i n_i) d:x' @ ns, degree=6)
             q = q_inti.eval(plhs=plhs)
-
-            pw_inti = topo.boundary['inner'].integral('(p) d:x' @ ns, degree=6)
-            pw = pw_inti.eval(plhs=plhs)
-            print("well pressure:", pw)
-
+            dT_inti = topo.boundary['inner'].integral('(T_,i n_i) d:x' @ ns, degree=6)
+            dT = dT_inti.eval(Tlhs=plhs)
             dp_inti = topo.boundary['inner'].integral('(p_,i n_i) d:x' @ ns, degree=6)
             dp = dp_inti.eval(plhs=plhs)
 
             print("the fluid flux in the FEA simulated:", q, "the flux that you want to impose:", (ns.v).eval())
-            print("pressure gradient", dp)
+            print("the temperature gradient in the FEA simulated:", dT, "the temperature that you want to impose:")
 
             plottopo = topo[:, :, 0:].boundary['back']
-
-            # # locally refine
-            # nref = 4
-            # ns.sd = (ns.x[0]) ** 2
-            # refined_topo = RefineBySDF(plottopo, ns.rw, geom[0], nref)
-            #
-            # plottopo = refined_topo
-
-            # err = topo.integral('<dp dp, sum:ij(d(dp, x_j)^2)>_n d:x' @ ns, degree=9).eval(plhs=plhs) ** .5
-            # treelog.user('errors: L2={:.2e}, H1={:.2e}'.format(*err))
-            # return err, cons, lhs
 
             ###########################
             # Post processing         #
             ###########################
 
+
+
             bezier = plottopo.sample('bezier', 7)
 
             x, q, p = bezier.eval(['x_i', 'q_i', 'p'] @ ns, plhs=plhs)
 
-            # T = bezier.eval(['T'] @ ns, Tlhs=Tlhs)
-            # TT = T[0]
-
+            T = bezier.eval(['T'] @ ns, Tlhs=Tlhs)
+            TT = T[0]
             t1 = time
             t2 = time - endtime
 
@@ -418,9 +392,11 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 # print("nanjoin x domain", len(nanjoin(x[:, 0], bezier.tri)))
                 # print("normal x domain", len(x[:, 0]))
 
-                # Tex = Tanalyticaldrawdown(ns, t1, ns.rw)
-                # Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
-                # Tarrayexact[istep] = Tex
+                Tex = Tanalyticaldrawdown(ns, t1, ns.rw)
+                Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
+                Tarrayexact[istep] = Tex
+                print("TwellFEA", Tarraywell[istep])
+                print("TwellEX", Tex)
 
                 #export
                 # with export.mplfigure('pressure1d.png', dpi=800) as plt:
@@ -444,7 +420,6 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 #     ax.legend(loc="center right")
 
             else:
-                break
                 pex2 = panalyticalbuildup(ns, endtime, t2, ns.rw)
                 parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
                 print("pwellFEA", parraywell[istep])
@@ -452,9 +427,11 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 parrayexact[istep] = pex2
                 print("pwellEX", pex2)
 
-                # Tex2 = Tanalyticalbuildup(ns, endtime, t2, ns.rw)
-                # Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
-                # Tarrayexact[istep] = Tex2
+                Tex2 = Tanalyticalbuildup(ns, endtime, t2, ns.rw)
+                Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
+                Tarrayexact[istep] = Tex2
+                print("TwellFEA", Tarraywell[istep])
+                print("TwellEX", Tex2)
 
             # if time == endtime: #export
             #
@@ -532,27 +509,27 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                     ax1.legend(loc="center right")
                     ax2.plot(timeperiod, Qarray, 'k')
 
-                with export.mplfigure('pressuretimeerror.png', dpi=800) as plt:
-                    ax1 = plt.subplots()
-                    ax2 = ax1.twinx()
-                    ax1.set(xlabel='Time [s]')
-                    ax1.set(ylabel=r'$\left(\left|p_{w}-{p}_{w,exact}\right|/\left|p_{w,0}\right|\right)$', yscale="log")
-                    ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
-                    ax1.plot(timeperiod, parrayerror / 225e5, 'bo', label=r'$r_{dr} = 1000m$ refined mesh')
-                    ax1.set_ylim(ymin=0.00005)
-                    ax1.legend(loc="center right")
-                    ax2.plot(timeperiod, Qarray, 'k')
-
-                # with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+                # with export.mplfigure('pressuretimeerror.png', dpi=800) as plt:
                 #     ax1 = plt.subplots()
                 #     ax2 = ax1.twinx()
                 #     ax1.set(xlabel='Time [s]')
-                #     ax1.set_ylabel('Temperature [K]', color='b')
+                #     ax1.set(ylabel=r'$\left(\left|p_{w}-{p}_{w,exact}\right|/\left|p_{w,0}\right|\right)$', yscale="log")
                 #     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
-                #     ax1.plot(timeperiod, Tarraywell, 'ro', label="FEM")
-                #     ax1.plot(timeperiod, Tarrayexact, label="analytical")
+                #     ax1.plot(timeperiod, parrayerror / 225e5, 'bo', label=r'$r_{dr} = 1000m$ refined mesh')
+                #     ax1.set_ylim(ymin=0.00005)
                 #     ax1.legend(loc="center right")
                 #     ax2.plot(timeperiod, Qarray, 'k')
+
+                with export.mplfigure('temperaturetime.png', dpi=800) as plt:
+                    ax1 = plt.subplots()
+                    ax2 = ax1.twinx()
+                    ax1.set(xlabel='Time [s]')
+                    ax1.set_ylabel('Temperature [K]', color='b')
+                    ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
+                    ax1.plot(timeperiod, Tarraywell, 'ro', label="FEM")
+                    ax1.plot(timeperiod, Tarrayexact, label="analytical")
+                    ax1.legend(loc="center right")
+                    ax2.plot(timeperiod, Qarray, 'k')
 
                 # mesh
                 # bezier = plottopo.sample('bezier', 2)
@@ -569,7 +546,26 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 # break
 
             plhs0 = plhs.copy()
-            #Tlhs0 = Tlhs.copy()
+            Tlhs0 = Tlhs.copy()
+
+            with export.mplfigure('pressure.png', dpi=800) as fig:
+                ax = fig.add_subplot(111, title='pressure', aspect=1)
+                ax.autoscale(enable=True, axis='both', tight=True)
+                im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, p, shading='gouraud', cmap='jet')
+                ax.add_collection(
+                    collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k',
+                                               linewidths=0.2,
+                                               alpha=0.2))
+                fig.colorbar(im)
+
+            with export.mplfigure('temperature.png', dpi=800) as fig:
+                ax = fig.add_subplot(111, title='temperature', aspect=1)
+                ax.autoscale(enable=True, axis='both', tight=True)
+                im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, TT, shading='gouraud', cmap='jet')
+                ax.add_collection(
+                    collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k', linewidths=0.2,
+                                               alpha=0.2))
+                fig.colorbar(im)
 
         return parraywell, N
 
@@ -851,6 +847,22 @@ def Tanalyticalbuildup(ns, endtime, t2, R):
         Tex2 = Tex - (lateTei * constantjt * ns.Jw / (4 * math.pi * ns.K)).eval()
 
     return Tex2
+
+def RefineBySDF(topo, radius, sdf, nrefine):
+    refined_topo = topo
+    for n in range(nrefine):
+        elems_to_refine = []
+        k = 0
+        bez = refined_topo.sample('bezier',2)
+        sd = bez.eval(sdf)
+        sd = sd.reshape( [len(sd)//4, 4] )
+        for i in range(len(sd)):
+            if any(sd[i,:] == radius.eval()):
+                elems_to_refine.append(k)
+            k = k + 1
+        refined_topo = refined_topo.refined_by(refined_topo.transforms[np.array(elems_to_refine)])
+
+    return refined_topo
 
 #user input
 def get_welldata(parameter):
