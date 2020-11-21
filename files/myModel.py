@@ -108,7 +108,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [60s]
          Time step.
 
-       endtime [180s]
+       endtime [600s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
@@ -293,9 +293,13 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ns.q_i  = '-(  k  / mu ) p_,i'
             ns.qh_i = '-λ T_,i'
             ns.v    = 'Q / Aw'
-            ns.alpha= '(ρf cf) / (ρ cp)'
             ns.pref = 225e5     # [Pa]
             ns.Tref = 90 + 273  # [K]
+
+            ns.constantjt = -1.478e-7
+            ns.phieff = ns.φ * (ns.ρf * ns.cf) / (ns.ρ * ns.cp) * (ns.constantjt + 1/(ns.ρf * ns.cf))
+            print((ns.phieff - ns.constantjt).eval())
+            ns.epsilonjt = -0.0024 #-1.478e-7
 
             psqr = topo.boundary['outer'].integral('( (p - pref)^2 ) d:x' @ ns, degree=2)  # farfield pressure
             pcons = solver.optimize('plhs', psqr, droptol=1e-15)
@@ -322,22 +326,24 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             pres = -topo.integral('pbasis_n,i q_i d:x' @ ns, degree=6)  # convection term darcy
             pres -= topo.boundary['strata, inner'].integral('(pbasis_n q_i n_i) d:x' @ ns, degree=degree * 3)
             Tres = topo.integral('(Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2) # diffusion term
-            Tres += topo.integral('(Tbasis_n ρ cp (q_i T)_,i) d:x' @ ns, degree=degree * 2) # convection term
+            Tres -= topo.integral('(Tbasis_n ρf cf q_i T_,i) d:x' @ ns, degree=degree * 2) # convection term
+            # Tres += topo.boundary['strata'].integral('Tbasis_n T_,i n_i d:x' @ ns, degree=degree * 4)
+            Tres += topo.integral('(Tbasis_n ρf epsilonjt q_i p_,i) d:x' @ ns, degree=degree * 2)  # J-T effect
 
             if istep > 0:
-                pres += topo.integral('pbasis_n (φ ct) δp d:x' @ ns, degree=degree * 3)  # storativity aquifer
-                pres += topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
-                Tres += topo.integral('Tbasis_n (ρ cp) δT d:x' @ ns, degree=degree * 3) #heat storage aquifer
-                Tres += topo.boundary['inner'].integral('Tbasis_n v alpha d:x' @ ns, degree=degree * 4)  # advection with well
+                pres += topo.integral('pbasis_n (φ ct) δp d:x' @ ns, degree=degree * 3)                   # storativity aquifer
+                pres += topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)                  # mass conservation well
+                Tres += topo.integral('Tbasis_n (ρ cp) δT d:x' @ ns, degree=degree * 3)                   # heat storage aquifer
+                Tres += topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2) # neumann bc
 
-            if istep == N:
+            if istep >= N:
                 ns.Td = bezier.eval(['T'] @ ns, Tlhs=Tlhs)[0][0]
                 Tsqr += topo.boundary['inner'].integral('( (T - Td)^2 ) d:x' @ ns, degree=2)
                 Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
 
             if istep > N:
                 pres -= topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
-                Tres -= topo.boundary['inner'].integral('Tbasis_n v alpha T_,i n_i d:x' @ ns, degree=degree * 4)  # advection with well
+                # Tres += topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2) # neumann bc
 
             plhs = solver.solve_linear('plhs', pres, constrain=pcons, arguments={'plhs0': plhs0})
             Tlhs = solver.solve_linear('Tlhs', Tres, constrain=Tcons, arguments={'plhs': plhs, 'Tlhs0': Tlhs0})
@@ -558,14 +564,14 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                                                alpha=0.2))
                 fig.colorbar(im)
 
-            with export.mplfigure('temperature.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='temperature', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, TT, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k', linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
+            with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                ax = plt.subplots()
+                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                ax.plot(x[:, 0][::100], TT[::100], label="FEM")
+                ax.plot(x[:, 0][::100],
+                        np.array(Tanalyticaldrawdown(ns, t1, x[:, 0][::100]))[0][0][0],
+                        label="analytical")
+                ax.legend(loc="center right")
 
         return parraywell, N
 
@@ -811,8 +817,10 @@ def panalyticalbuildup(ns, endtime, t2, R):
 
 def Tanalyticaldrawdown(ns, t1, R):
     ns = ns.copy_()
-    constantjt = -1.478e-7
-    phieff = ns.φ * (ns.ρf * ns.cf) / (ns.ρ * ns.cp) * (constantjt + 1/(ns.ρf * ns.cf))
+    constantjt = ns.constantjt
+    phieff = ns.phieff
+    # constantjt = -1.478e-7
+    # phieff = ns.φ * (ns.ρf * ns.cf) / (ns.ρ * ns.cp) * (constantjt + 1/(ns.ρf * ns.cf))
 
     ns.eta = ns.K / (ns.φ * ns.ct)
     aconstant = ( ns.cs * ns.Jw) / (4 * math.pi * ns.eta)
@@ -820,14 +828,14 @@ def Tanalyticaldrawdown(ns, t1, R):
     pressuredif = (-ns.Jw * ei / (4 * math.pi * ns.K)).eval()
 
     Tei = sc.expi((-R**2/(4*ns.eta*t1) - aconstant).eval())
-    Tex = (ns.Tref - (constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (phieff - constantjt ) * Tei).eval()
+    Tex = (ns.Tref + (constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (phieff - constantjt ) * Tei).eval()
 
     return Tex
 
 def Tanalyticalbuildup(ns, endtime, t2, R):
     ns = ns.copy_()
-    constantjt = -1.478e-7
-    phieff = ns.φ * (ns.ρf * ns.cf) / (ns.ρ * ns.cp) * (constantjt + 1/(ns.ρf * ns.cf))
+    constantjt = ns.constantjt
+    phieff = ns.phieff
 
     ns.eta = ns.K / (ns.φ * ns.ct)
     Tex = Tanalyticaldrawdown(ns, endtime, R)
