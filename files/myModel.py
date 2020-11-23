@@ -78,7 +78,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        btype [spline]
          Type of basis function (std/spline).
 
-       elems [40]
+       elems [60]
          Number of elements.
 
        rw [0.1m]
@@ -108,7 +108,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [60s]
          Time step.
 
-       endtime [600s]
+       endtime [1800s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
