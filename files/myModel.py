@@ -78,7 +78,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        btype [spline]
          Type of basis function (std/spline).
 
-       elems [60]
+       elems [30]
          Number of elements.
 
        rw [0.1m]
@@ -297,11 +297,10 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ns.Tref = 90 + 273  # [K]
             ns.Twell = 88 + 273  # [K]
 
-            ns.epsilonjt = 2e-7 #-0.0024
-            ns.constantjt = ns.epsilonjt #-1.478e-7
+            ns.epsilonjt = 2e-7
+            ns.constantjt = ns.epsilonjt
             ns.cpratio = (ns.ρf * ns.cf) / (ns.ρ * ns.cp)
             ns.phieff = 0 #ns.φ * ns.cpratio * (ns.epsilonjt + 1/(ns.ρf * ns.cf))
-            print((ns.phieff - ns.constantjt).eval())
 
             psqr = topo.boundary['outer'].integral('( (p - pref)^2 ) d:x' @ ns, degree=2)  # farfield pressure
             pcons = solver.optimize('plhs', psqr, droptol=1e-15)
@@ -339,24 +338,22 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 Tres += topo.integral('Tbasis_n (ρ cp) δT d:x' @ ns, degree=degree * 3)                   # heat storage aquifer
                 Tres += topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2) # neumann bc
 
+            if istep == (N+1):
+                ns.Td = bezier.eval(['T'] @ ns, Tlhs=Tlhs)[0][0]
+
             if istep > N:
                 pres -= topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
                 Tres -= topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2) # neumann bc
 
-            if istep > N:
-                ns.Td = bezier.eval(['T'] @ ns, Tlhs=Tlhs)[0][0]
                 Tsqr += topo.boundary['inner'].integral('( (T - Td)^2 ) d:x' @ ns, degree=2)
                 Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
-
-
-
 
             plhs = solver.solve_linear('plhs', pres, constrain=pcons, arguments={'plhs0': plhs0})
             Tlhs = solver.solve_linear('Tlhs', Tres, constrain=Tcons, arguments={'plhs': plhs, 'Tlhs0': Tlhs0})
 
-            Tresneumann = topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2)
-            neumann = Tresneumann.eval(Tlhs=Tlhs)
-            print("Neumann eval", neumann)
+            # Tresneumann = topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2)
+            # neumann = Tresneumann.eval(Tlhs=Tlhs)
+            # print("Neumann eval", neumann)
 
             q_inti = topo.boundary['inner'].integral('(q_i n_i) d:x' @ ns, degree=6)
             q = q_inti.eval(plhs=plhs)
@@ -365,16 +362,14 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             dp_inti = topo.boundary['inner'].integral('(p_,i n_i) d:x' @ ns, degree=6)
             dp = dp_inti.eval(plhs=plhs)
 
-            print("the fluid flux in the FEA simulated:", q, "the flux that you want to impose:", (ns.v).eval())
-            print("the temperature gradient in the FEA simulated:", dT, "the temperature that you want to impose:")
+            # print("the fluid flux in the FEA simulated:", q, "the flux that you want to impose:", (ns.v).eval())
+            # print("the temperature gradient in the FEA simulated:", dT, "the temperature that you want to impose:")
 
             plottopo = topo[:, :, 0:].boundary['back']
 
             ###########################
             # Post processing         #
             ###########################
-
-
 
             bezier = plottopo.sample('bezier', 7)
 
@@ -414,26 +409,27 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 print("TwellFEA", Tarraywell[istep])
                 print("TwellEX", Tex)
 
-                #export
-                # with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                #     ax = plt.subplots()
-                #     ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                #     ax.set_ylim([20,23])
-                #     ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100]/1e6, label="FEM")
-                #     ax.plot(x[:, 0][::100],
-                #             np.array(panalyticaldrawdown(ns, t1, x[:, 0]))[0][0][0][::100]/1e6,
-                #             label="analytical")
-                #     ax.legend(loc="center right")
+                def plotdrawdown_1D():
+                    #export
+                    with export.mplfigure('pressure1d.png', dpi=800) as plt:
+                        ax = plt.subplots()
+                        ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+                        ax.set_ylim([20,23])
+                        ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100]/1e6, label="FEM")
+                        ax.plot(x[:, 0][::100],
+                                np.array(panalyticaldrawdown(ns, t1, x[:, 0]))[0][0][0][::100]/1e6,
+                                label="analytical")
+                        ax.legend(loc="center right")
 
-                # with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                #     ax = plt.subplots()
-                #     ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                #     ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(TT, bezier.tri)[::100], label="FEM")
-                #     ax.plot(x[:, 0][::100],
-                #             np.array(Tanalyticaldrawdown(ns, t1, x[:, 0]))[0][0][0][::100],
-                #             label="analytical")
-                #
-                #     ax.legend(loc="center right")
+                    with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                        ax = plt.subplots()
+                        ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10], nanjoin(TT, bezier.tri)[0:100000:10], label="FEM")
+                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10],
+                                np.array(Tanalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0][0:100000:10],
+                                label="analytical")
+
+                        ax.legend(loc="center right")
 
             else:
                 pex2 = panalyticalbuildup(ns, endtime, t2, ns.rw)
@@ -449,39 +445,28 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 print("TwellFEA", Tarraywell[istep])
                 print("TwellEX", Tex2)
 
-            # if time == endtime: #export
-            #
-            #     with export.mplfigure('pressure1d.png', dpi=800) as plt:
-            #         ax = plt.subplots()
-            #         ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-            #         ax.set_ylim([20,23])
-            #         ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100]/1e6, label="FEM")
-            #         # print(nanjoin(x[:, 0], bezier.tri))
-            #         # print(np.array(panalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0])
-            #         # print(x[:,0])
-            #         ax.plot(x[:, 0][::100],
-            #                 np.array(panalyticaldrawdown(ns, t1, x[:, 0]))[0][0][0][::100]/1e6,
-            #                 label="analytical")
-            #         ax.legend(loc="center right")
+                def plotbuildup_1D():
 
-            # if time == 2*endtime:
-            #         with export.mplfigure('pressure1d.png', dpi=800) as plt:
-            #             ax = plt.subplots()
-            #             ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-            #             ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100] / 1e6, label="FEM")
-            #             ax.plot(x[:, 0][::100],
-            #                     np.array(panalyticalbuildup(ns, endtime, t2, x[:, 0]))[0][0][0][
-            #                     ::100] / 1e6, label="analytical")
-            #             ax.legend(loc="center right")
-            #
-            #         with export.mplfigure('temperature1d.png', dpi=800) as plt:
-            #             ax = plt.subplots()
-            #             ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-            #             ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(TT, bezier.tri)[::100], label="FEM")
-            #             ax.plot(x[:, 0][::100],
-            #                     np.array(Tanalyticalbuildup(ns, endtime, t2, x[:, 0]))[0][0][0][::100],
-            #                     label="analytical")
-            #             ax.legend(loc="center right")
+                    with export.mplfigure('pressure1d.png', dpi=800) as plt:
+                        ax = plt.subplots()
+                        ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
+                        ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100] / 1e6, label="FEM")
+                        ax.plot(x[:, 0][::100],
+                                np.array(panalyticalbuildup(ns, endtime, t2, x[:, 0]))[0][0][0][
+                                ::100] / 1e6, label="analytical")
+                        ax.legend(loc="center right")
+
+                    with export.mplfigure('temperature1d.png', dpi=800) as plt:
+                        ax = plt.subplots()
+                        ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
+                        # ax.set_ylim([362.85, 363.02])
+                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10], nanjoin(TT, bezier.tri)[0:100000:10],
+                                label="FEM")
+                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10],
+                                np.array(Tanalyticalbuildup(ns, endtime, t2, nanjoin(x[:, 0], bezier.tri)[0:100000:10]))[0][
+                                    0][0],
+                                label="analytical")
+                        ax.legend(loc="center right")
 
             if time >= 2*endtime: #export
                 parrayerror = np.abs(np.subtract(parraywell, parrayexact))
@@ -565,26 +550,15 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             plhs0 = plhs.copy()
             Tlhs0 = Tlhs.copy()
 
-            with export.mplfigure('pressure.png', dpi=800) as fig:
-                ax = fig.add_subplot(111, title='pressure', aspect=1)
-                ax.autoscale(enable=True, axis='both', tight=True)
-                im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, p, shading='gouraud', cmap='jet')
-                ax.add_collection(
-                    collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k',
-                                               linewidths=0.2,
-                                               alpha=0.2))
-                fig.colorbar(im)
-
-            with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                ax = plt.subplots()
-                ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                # ax.set_ylim([362.9, 363.1])
-                # ax.plot(nanjoin(x[:, 0], bezier.tri)[0:20000], nanjoin(TT, bezier.tri)[0:20000], label="FEM")
-                ax.plot(x[:, 0][0:20000], TT[0:20000], label="FEM")
-                ax.plot(x[:, 0][0:20000],
-                        np.array(Tanalyticaldrawdown(ns, t1, x[:, 0][0:20000]))[0][0][0],
-                        label="analytical")
-                ax.legend(loc="center right")
+            # with export.mplfigure('pressure.png', dpi=800) as fig:
+            #     ax = fig.add_subplot(111, title='pressure', aspect=1)
+            #     ax.autoscale(enable=True, axis='both', tight=True)
+            #     im = ax.tripcolor(x[:, 0], x[:, 1], bezier.tri, p, shading='gouraud', cmap='jet')
+            #     ax.add_collection(
+            #         collections.LineCollection(np.array([x[:, 0], x[:, 1]]).T[bezier.hull], colors='k',
+            #                                    linewidths=0.2,
+            #                                    alpha=0.2))
+            #     fig.colorbar(im)
 
         return parraywell, N
 
@@ -798,6 +772,8 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     #             break
     return
 
+#def output & plotting
+
 def panalyticaldrawdown(ns, t1, R):
     ns = ns.copy_()
     ns.eta = ns.K / (ns.φ * ns.ct)
@@ -849,7 +825,7 @@ def Tanalyticalbuildup(ns, endtime, t2, R):
     ns.eta = ns.K / (ns.φ * ns.ct)
     Tex = Tanalyticaldrawdown(ns, endtime, R)
 
-    latetime = 360
+    latetime = 60
 
     if (t2-endtime < latetime):
         #early-time buildup solution

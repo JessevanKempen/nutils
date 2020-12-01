@@ -47,31 +47,92 @@ doublet = DoubletGenerator(aquifer, well, timestep)
 print("\r\nRunning Analytical Analysis...")
 PumpTest(doublet)
 
-# Set stoichastic parameters
-print("\r\nSetting stoichastic parameters...")
-porosity = get_samples_porosity(N)
-permeability = get_samples_permeability(porosity, N)
+def performMCMC(size):
+    # Set stoichastic parameters
+    print("\r\nSetting stoichastic parameters...")
+    # porosity = get_samples_porosity(N)
+    # permeability = get_samples_permeability(porosity, N)
+
+    # define probability distribution functions
+    Hpdf = H = np.random.uniform(low=90, high=110, size=size)
+    φpdf = φ = get_samples_porosity(size)            #joined distribution
+    Kpdf = K = get_samples_permeability(φpdf, size)  #joined distribution
+    ctpdf = ct = np.random.uniform(low=1e-11, high=1e-9, size=size)
+    Qpdf = Q = np.random.uniform(low=0.1, high=1.0, size=size)
+    cspdf = cs = np.random.uniform(low=2400, high=2900, size=size)
+    print("step", Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf)
+
+    # empty arrays & matrix
+    pdrawdown = np.empty([size])
+    pbuildup = np.empty([size])
+    pmatrixwell = np.zeros([size, 61])
+
+    for index in range(size):
+          parraywell, N = main(degree=2, btype="spline", elems=25, rw=0.1, rmax=1000, H=Hpdf[index], mu=0.31e-3, φ=φpdf[index], ctinv=1/ctpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=60, endtime=1800)
+          # pdrawdown[index] = parraywell[N]
+          # pbuildup[index] = parraywell[-1]
+          # print("pdrawdown", pdrawdown)
+          # print("pbuildup", pbuildup)
+
+          pmatrixwell[index, :] = parraywell
+          #save pressure after each timestep for each run, export array from main()
+          #save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
+
+          with open('pmatrix.npy', 'wb') as f:
+              np.save(f, pmatrixwell)
+
+          # np.savetxt('data.csv', (col1_array, col2_array, col3_array), delimiter=',')
+
+    return pmatrixwell
 
 if not performInference:
+    # Run Bayesian Forward Uncertainty Model
+    import pymc3 as pm
+    from pymc3.distributions import Interpolated
+    print('Running on PyMC3 v{}'.format(pm.__version__))
+
     # Run Finite Element Model (Forward)
     print("\r\nRunning FE model...")
-    p_model = np.empty([N])
-    T_model = np.empty([N])
+    # p_model = np.empty([N])
+    # T_model = np.empty([N])
+    # for index, (k, eps) in enumerate(zip(permeability, porosity)):
+    #     sol = DoubletFlow(aquifer, well, doublet, k, eps, timestep, endtime)
+    # pdrawdown[index] = parraywell[N]
+    # pbuildup[index] = parraywell[-1]
+    # print("pdrawdown", pdrawdown)
+    # print("pbuildup", pbuildup)
 
-    for index, (k, eps) in enumerate(zip(permeability, porosity)):
-        sol = DoubletFlow(aquifer, well, doublet, k, eps, timestep, endtime)
+        # p_model[index] = sol[0]
+        # T_model[index] = sol[1]
 
-        p_model[index] = sol[0]
-        T_model[index] = sol[1]
-    print("p_inlet", p_model, "T_outlet", T_model)
+    pmatrixwell = performMCMC(N)
+
+    ###########################
+    # Post processing         #
+    ###########################
+    # with open('pmatrix.npy', 'rb') as f:
+    #     a = np.load(f)
+    # print("a matrix", a)
+
+    # fig, ax = plt.subplots(1, 1,
+    #                        figsize=(10, 7),
+    #                        tight_layout=True)
+    #
+    # ax.set(xlabel='Wellbore pressure [Pa]', ylabel='Probability')
+    # ax.hist(pdrawdown, density=True, histtype='stepfilled', alpha=0.2, bins=20)
+    #
+    # plt.show()
+
+    # print("p_inlet", p_model, "T_outlet", T_model)
 
     # Distribution of predicted P,T
-    mu_T = np.mean(T_model)
-    stddv_T = np.var(T_model) ** 0.5
-    mu_p = np.mean(p_model)
-    stddv_p = np.var(p_model) ** 0.5
-    print("T_outlet mean", mu_T, "T_outlet sd", stddv_T)
-    print("p_inlet mean", mu_p, "p_inlet sd", stddv_p)
+
+    # mu_T = np.mean(T_model)
+    # stddv_T = np.var(T_model) ** 0.5
+    # mu_p = np.mean(p_model)
+    # stddv_p = np.var(p_model) ** 0.5
+    # print("T_outlet mean", mu_T, "T_outlet sd", stddv_T)
+    # print("p_inlet mean", mu_p, "p_inlet sd", stddv_p)
 
     # Sobal 1st order sensitivity index with 10 parameters
     # for i in length(parameter):
@@ -102,9 +163,28 @@ else:
     S0_sand = np.random.uniform(low=1.5e2, high=2.2e2, size=N) # specific surface area [1/cm]
 
 
+    # Mean of variables
+    𝜇_H = 100
+    𝜇_φ = 0.3
+    𝜇_ct = 1e-10
+    𝜇_Q = 0.5
+    𝜇_cs = 2650
+
     with pm.Model() as PriorModel:
 
         # Priors for unknown model parameters (import myUQ.py)
+        Hpdf = H = pm.Normal('porosity', mu=𝜇_H , sd=0.025)
+        φpdf = φ = pm.Lognormal('porosity', mu=math.log(𝜇_φ), sd=0.24) #joined distribution
+
+        porosity_samples = φ.random(size=N)
+        permeability_samples = constant * (porosity_samples ** tothepower / S0_sand ** 2)
+        mu_per = np.mean(permeability_samples)
+
+        Kpdf = K = pm.Lognormal('permeability', mu=math.log(mu_per), sd=1) #joined distribution
+        ctpdf = ct = pm.Normal('porosity', mu=𝜇_ct , sd=0.025)
+        Qpdf = Q = pm.Normal('porosity', mu=𝜇_Q , sd=0.025)
+        cspdf = cs = pm.Normal('porosity', mu=𝜇_cs , sd=0.025)
+
         # permeability = pm.Lognormal('permeability', mu=math.log(9e-9), sd=0.025)
         #
         # porosity_samples = ((permeability.random(size=N) * S0_sand ** 2) / (constant)) ** (1 / tothepower)
@@ -114,37 +194,41 @@ else:
 
         # Priors for unknown model parameters based on porosity first as joined distribution
         # porosity = pm.Uniform('porosity', lower=0.1, upper=0.5)
-        porosity = pm.Lognormal('porosity', mu=math.log(0.3), sd=0.24)       #porosity 0 - 0.3 als primary data, permeability als secundary data
-        porosity_samples = porosity.random(size=N)
+        # porosity = pm.Lognormal('porosity', mu=math.log(0.3), sd=0.24)       #porosity 0 - 0.3 als primary data, permeability als secundary data
 
-        permeability_samples = constant * ( porosity_samples** tothepower / S0_sand ** 2 )
-        print('perm samples', permeability_samples)
-        mu_per = np.mean(permeability_samples)
+        # porosity_samples = porosity.random(size=N)
+        # permeability_samples = constant * ( porosity_samples** tothepower / S0_sand ** 2 )
+        # mu_per = np.mean(permeability_samples)
+        # permeability = pm.Lognormal('permeability', mu=math.log(mu_per), sd=1)
+
         # stddv_per = np.var(permeability_samples) ** 0.5
         # print("permeability mean", m?u_per, "permeability standard deviation", stddv_per)
-        permeability = pm.Lognormal('permeability', mu=math.log(mu_per), sd=1)
+
 
 
         # Expected value of outcome (problem is that i can not pass a pdf to my external model function, now i pass N random values to the function, which return N random values back, needs to be a pdf again)
-        print("\r\nRunning FE model...", permeability_samples, 'por', porosity_samples)
+        # print("\r\nRunning FE model...", permeability_samples, 'por', porosity_samples)
 
-        p_model = np.empty([N])
-        T_model = np.empty([N])
-        bar = 1e5
+        # p_model = np.empty([N])
+        # T_model = np.empty([N])
+        # bar = 1e5
+
+        #Hier moeten meerdere variable.random(size=N) in de for loop. Hoe?
+        #Uit alle verdelingen boven een array vormen met waardes, en dan hier in stoppen
 
         for index, (k, epsilon) in enumerate(zip(permeability.random(size=N), porosity_samples)):
             p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime)
 
-            p_model[index] = p_inlet
-            T_model[index] = T_prod
-
-        mu_p = np.mean(p_model)
-        stddv_p = np.var(p_model) ** 0.5
-        mu_T = np.mean(T_model)
-        stddv_T = np.var(T_model) ** 0.5
+        #     p_model[index] = p_inlet
+        #     T_model[index] = T_prod
+        #
+        # mu_p = np.mean(p_model)
+        # stddv_p = np.var(p_model) ** 0.5
+        # mu_T = np.mean(T_model)
+        # stddv_T = np.var(T_model) ** 0.5
 
         # Likelihood (sampling distribution) of observations
-        T_obs = pm.Normal('T_obs', mu=mu_T, sd=10, observed=T_data)
+        # T_obs = pm.Normal('T_obs', mu=mu_T, sd=10, observed=T_data)
         p_obs = pm.Normal('p_obs', mu=mu_p, sd=10, observed=p_data)
 
     with PriorModel:
