@@ -11,6 +11,7 @@ sns.set_style("whitegrid")
 
 from myModel import *
 from myUQ import *
+from myFEM import *
 
 def show_plot():
     with open('pmatrix.npy', 'rb') as f:
@@ -38,7 +39,7 @@ def show_plot():
 
 def perform_MCMC():
     # user input
-    size = 25
+    size = 2
 
     # define probability distribution functions
     Hpdf = H = np.random.uniform(low=90, high=110, size=size)
@@ -98,5 +99,13 @@ def show_uniformplot():
     ax.set(xlabel=r'$Q [m^3/s]$', ylabel='Probability')
     ax.hist(Q, density=True, histtype='stepfilled', alpha=0.2, bins=20)
     plt.show()
+
+def calculate_deterministic(P_wellproducer):
+    aquifer = Aquifer(params_aquifer)
+    well = Well(params_well, params_aquifer)
+    doublet = DoubletGenerator(aquifer, well, P_wellproducer)
+    PumpTest(doublet)
+
+    print("Pressure node 8", round(doublet.get_P_node8(well.D_in)/1e5,2), "bar")
 
 show_plot()

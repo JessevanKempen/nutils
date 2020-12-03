@@ -1,7 +1,5 @@
 from nutils import mesh, function, solver, export, cli, topology, sparse, types
 import numpy as np, treelog
-from matplotlib import collections
-import matplotlib.pyplot as plt
 import math
 import vtk
 import scipy.special as sc
@@ -17,54 +15,9 @@ sns.set_style("whitegrid")
 
 unit = types.unit(m=1, s=1, g=1e-3, K=1, N='kg*m/s2', Pa='N/m2', J='N*m', W='J/s', L='dm3', D='0.9869μm2')
 
-from myIOlib import *
-from myUQ import *
-
-# Generate text file for parameters
-generate_txt( "parameters.txt" )
-
-# Import parameters.txt to variables
-print("Reading model parameters...")
-params_aquifer, params_well = read_from_txt( "parameters.txt" )
-
-# Assign variables into classes
-class Aquifer:
-
-    def __init__(self, aquifer):
-
-        self.d_top = aquifer['d_top']       # depth top aquifer at production well
-        self.labda = aquifer['labda']       # geothermal gradient
-        self.H = aquifer['H']
-        self.T_surface = aquifer['T_surface']
-        self.porosity = aquifer['porosity']
-        self.rho_f = aquifer['rho_f']
-        self.rho_s = aquifer['rho_s']
-        self.mu = aquifer['viscosity']
-        self.K = aquifer['K']
-        self.Cp_f = aquifer['Cp_f']         # heat capacity fluid [J/kg K]
-        self.Cp_s = aquifer['Cp_s']         # heat capacity strata [J/kg K]
-        self.labda_s = aquifer['labda_s']   # thermal conductivity solid [W/mK]
-        self.labda_l = aquifer['labda_l']   # thermal conductivity liquid [W/mK]
-        self.saltcontent = aquifer['saltcontent']
-        self.g = 9.81
-
-class Well:
-
-    def __init__(self, well, aquifer):
-
-                self.r = well['r']  # well radius; assume radial distance for monitoring drawdown
-                self.Q = well['Q']  # pumping rate from well (negative value = extraction)
-                self.L = well['L']  # distance between injection well and production well
-                self.Ti_inj = well['Ti_inj']  # initial temperature of injection well (reinjection temperature)
-                self.porosity = well['porosity']
-                self.mdot = self.Q * aquifer['rho_f']
-                self.D_in = 2 * self.r
-                self.A_well =  2 * np.pi * self.r
-
-# Construct the objects for the model
-print("Constructing the FE model...")
-aquifer = Aquifer(params_aquifer)
-well = Well(params_well, params_aquifer)
+from files.myIOlib import *
+from files.myUQ import *
+from files.myModellib import *
 
 def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], endtime:unit['s']):
     '''
@@ -108,7 +61,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [60s]
          Time step.
 
-       endtime [1800s]
+       endtime [600s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
@@ -560,7 +513,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             #                                    alpha=0.2))
             #     fig.colorbar(im)
 
-        return parraywell, N
+        return parraywell, Tarraywell
 
 
 
@@ -771,101 +724,6 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     #
     #             break
     return
-
-#def output & plotting
-
-def panalyticaldrawdown(ns, t1, R):
-    ns = ns.copy_()
-    ns.eta = ns.K / (ns.φ * ns.ct)
-    ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
-    pdifference = (ns.Jw * ei / (4 * math.pi * ns.K)).eval()
-
-    pex = (ns.pref + pdifference).eval()
-    return pex
-
-def dpanalyticaldrawdown(ns, t1, R):
-    ns = ns.copy_()
-    ns.eta = ns.K / (ns.φ * ns.ct)
-    ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
-    pgrad = (2 * ns.Jw * ei / (4 * math.pi * ns.K * R)).eval()
-
-    return pgrad
-
-def panalyticalbuildup(ns, endtime, t2, R):
-    ns = ns.copy_()
-    ns.eta = ns.K / (ns.φ * ns.ct)
-
-    eid = sc.expi((-R ** 2 / (4 * ns.eta * endtime)).eval())
-    eib = sc.expi((-R**2 / (4 * ns.eta * t2-endtime)).eval())
-    # pex2 = (pex - ns.Jw * ei / (4 * math.pi * ns.K)).eval()
-
-    pdifference = (ns.Jw * (eid - eib) / (4 * math.pi * ns.K)).eval()
-    pexb = (ns.pref + pdifference).eval()
-
-    return pexb
-
-def Tanalyticaldrawdown(ns, t1, R):
-    ns = ns.copy_()
-
-    ns.eta = ns.K / (ns.φ * ns.ct)
-    aconstant = ( ns.cpratio * ns.Jw) / (4 * math.pi * ns.eta)
-    ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
-    pressuredif = (-ns.Jw * ei / (4 * math.pi * ns.K)).eval()
-
-    Tei = sc.expi((-R**2/(4*ns.eta*t1) - aconstant).eval())
-    Tex = (ns.Tref - (ns.constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (ns.phieff - ns.constantjt ) * Tei).eval()
-
-    return Tex
-
-def Tanalyticalbuildup(ns, endtime, t2, R):
-    ns = ns.copy_()
-    constantjt = ns.constantjt
-    phieff = ns.phieff
-
-    ns.eta = ns.K / (ns.φ * ns.ct)
-    Tex = Tanalyticaldrawdown(ns, endtime, R)
-
-    latetime = 60
-
-    if (t2-endtime < latetime):
-        #early-time buildup solution
-
-        earlyTei = sc.expi((-R ** 2 / (4 * ns.eta * t2-endtime)).eval())
-        Tex2 = Tex - (earlyTei * phieff * ns.Jw / (4 * math.pi * ns.K)).eval()
-
-    else:
-        #late-time buildup solution
-        lateTei  = sc.expi((-R**2 * ns.cp * ns.ρ / (4 * ns.λ * t2-endtime)).eval())
-
-        Tex2 = Tex - (lateTei * constantjt * ns.Jw / (4 * math.pi * ns.K)).eval()
-
-    return Tex2
-
-def RefineBySDF(topo, radius, sdf, nrefine):
-    refined_topo = topo
-    for n in range(nrefine):
-        elems_to_refine = []
-        k = 0
-        bez = refined_topo.sample('bezier',2)
-        sd = bez.eval(sdf)
-        sd = sd.reshape( [len(sd)//4, 4] )
-        for i in range(len(sd)):
-            if any(sd[i,:] == radius.eval()):
-                elems_to_refine.append(k)
-            k = k + 1
-        refined_topo = refined_topo.refined_by(refined_topo.transforms[np.array(elems_to_refine)])
-
-    return refined_topo
-
-#user input
-def get_welldata(parameter):
-    welldata = pd.read_excel(r'C:\Users\s141797\OneDrive - TU Eindhoven\Scriptie\nlog_welldata.xlsx') #for an earlier version of Excel use 'xls'
-    columns = ['PRESSURE', 'TEMPERATURE','CORRECTED_TIME']
-
-    df = pd.DataFrame(welldata, columns = columns)
-
-    return np.array(df.loc[:, parameter]) #np.array(df['PRESSURE']), np.array(df['TEMPERATURE'])
-
 
 if __name__ == '__main__':
     cli.run(main)

@@ -1,13 +1,19 @@
+#Ordering imports
 from myIOlib import *
-from myFEM import *
+from myUQlibrary import *
+from myFUQlib import *
+
 from myUQ import *
+# from myFUQ import *
+from myFUQlib import *
 from myModel import *
+
+#Ordering tools
 import numpy as np
 import arviz as az
 from scipy import stats
 import matplotlib as mpl
 from theano import as_op
-import theano
 import theano.tensor as tt
 
 import time
@@ -17,11 +23,11 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 10
+N = 2
 
 # Define time of simulation
-timestep = 1
-endtime = 100
+timestep = 60
+endtime = 1800
 
 # Forward/Bayesian Inference calculation
 performInference = False
@@ -32,67 +38,36 @@ outfile = 'output/output_%d.png' % N
 #################### Core #########################
 # Generate text file for parameters
 generate_txt( "parameters.txt" )
+P_wellproducer = 225e5
 
 # Import parameters.txt to variables
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
 
-# Construct the objects of for the model
-print("Constructing the FE model...")
+# Construct the objects for the doublet model
+print("Constructing the doublet model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
-doublet = DoubletGenerator(aquifer, well, timestep)
+doublet = DoubletGenerator(aquifer, well, P_wellproducer)
 
-# Run Analytical Model
-print("\r\nRunning Analytical Analysis...")
+# Evaluate the doublet model
+print("\r\nEvaluating numerical solution for the doublet model...")
 PumpTest(doublet)
-
-def performMCMC(size):
-    # Set stoichastic parameters
-    print("\r\nSetting stoichastic parameters...")
-    # porosity = get_samples_porosity(N)
-    # permeability = get_samples_permeability(porosity, N)
-
-    # define probability distribution functions
-    Hpdf = H = np.random.uniform(low=90, high=110, size=size)
-    φpdf = φ = get_samples_porosity(size)            #joined distribution
-    Kpdf = K = get_samples_permeability(φpdf, size)  #joined distribution
-    ctpdf = ct = np.random.uniform(low=1e-11, high=1e-9, size=size)
-    Qpdf = Q = np.random.uniform(low=0.1, high=1.0, size=size)
-    cspdf = cs = np.random.uniform(low=2400, high=2900, size=size)
-    print("step", Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf)
-
-    # empty arrays & matrix
-    pdrawdown = np.empty([size])
-    pbuildup = np.empty([size])
-    pmatrixwell = np.zeros([size, 61])
-
-    for index in range(size):
-          parraywell, N = main(degree=2, btype="spline", elems=25, rw=0.1, rmax=1000, H=Hpdf[index], mu=0.31e-3, φ=φpdf[index], ctinv=1/ctpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=60, endtime=1800)
-          # pdrawdown[index] = parraywell[N]
-          # pbuildup[index] = parraywell[-1]
-          # print("pdrawdown", pdrawdown)
-          # print("pbuildup", pbuildup)
-
-          pmatrixwell[index, :] = parraywell
-          #save pressure after each timestep for each run, export array from main()
-          #save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
-
-          with open('pmatrix.npy', 'wb') as f:
-              np.save(f, pmatrixwell)
-
-          # np.savetxt('data.csv', (col1_array, col2_array, col3_array), delimiter=',')
-
-    return pmatrixwell
+print("Pressure node 8", round(doublet.get_P_node8(well.D_in)/1e5,2), "bar")
 
 if not performInference:
-    # Run Bayesian Forward Uncertainty Model
+    # Run Bayesian Forward Uncertainty Quantification
     import pymc3 as pm
     from pymc3.distributions import Interpolated
     print('Running on PyMC3 v{}'.format(pm.__version__))
 
-    # Run Finite Element Model (Forward)
-    print("\r\nRunning FE model...")
+    # Run Forward Uncertainty Quantification
+    print("Solving Forward Uncertainty Quantification...")
+
+    #input: stochastic variables
+    #system: myModel (input)
+    #output: pressure, temperature
+
     # p_model = np.empty([N])
     # T_model = np.empty([N])
     # for index, (k, eps) in enumerate(zip(permeability, porosity)):
@@ -105,7 +80,19 @@ if not performInference:
         # p_model[index] = sol[0]
         # T_model[index] = sol[1]
 
-    pmatrixwell = performMCMC(N)
+    # Run Finite Element Analysis (Forward)
+    print("\r\nRunning FEA...")
+
+    # Set stoichastic parameters
+    print("\r\nSetting stoichastic parameters...")
+    parametersRVS = generateRVSfromPDF(size)
+
+    pmatrixwell = performFEA(parametersRVS, N, timestep, endtime)
+    #solFEA = performFEA(parameters, samplesize, timestep, endtime)
+
+    # Run Analytical Analysis (Forward)
+    print("\r\nRunning Analytical Analysis...")
+    solAA = performAA(parameters, samplesize, timestep, endtime)
 
     ###########################
     # Post processing         #
@@ -137,7 +124,6 @@ if not performInference:
     # Sobal 1st order sensitivity index with 10 parameters
     # for i in length(parameter):
     #     S(i) =  np.var(parameter(i)) / np.var(T_model)
-
 
 else:
     # Run Bayesian Inference
@@ -216,8 +202,20 @@ else:
         #Hier moeten meerdere variable.random(size=N) in de for loop. Hoe?
         #Uit alle verdelingen boven een array vormen met waardes, en dan hier in stoppen
 
-        for index, (k, epsilon) in enumerate(zip(permeability.random(size=N), porosity_samples)):
-            p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime)
+        # for index, (k, epsilon) in enumerate(zip(permeability.random(size=N), porosity_samples)):
+        #     p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime)
+
+        # Run Finite Element Analysis (Backward)
+        # insert code
+
+
+            # pdrawdown[index] = parraywell[N]
+            # pbuildup[index] = parraywell[-1]
+            # print("pdrawdown", pdrawdown)
+            # print("pbuildup", pbuildup)
+
+            pmatrixwell[index, :] = parraywell
+            Tmatrixwell[index, :] = Tarraywell
 
         #     p_model[index] = p_inlet
         #     T_model[index] = T_prod
@@ -322,29 +320,20 @@ else:
 
     plt.tight_layout();
 
-# Import Analytical Model for B.C. and define the model parameters
-# import mymodel
-
-# Construct Finite Element Model
-# print("Constructing the FE model...")
-# from myFEM import *
-
-# Solve Forward Uncertainty Quantification
-# print("Solving Forward Uncertainty Quantification...")
-# from myUQ import *
-
 # Stop timing code execution
 t1 = time.time()
 print("CPU time        [s]          : ", t1 - t0)
 
 # Stop timing code execution
 print("\r\nDone. Post-processing...")
-# plot_solution(sol, outfile)
 
+#################### Postprocessing #########################
+
+# Postprocessing
+# plot_solution(sol, outfile)
 # plot last FEM
 # plot 4 probability density functions
 
-# Postprocessing
 plt.show()
 
 

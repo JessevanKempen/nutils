@@ -5,6 +5,7 @@ from scipy import stats
 import math
 import pandas as pd
 import seaborn as sns
+from myUQlibrary import *
 
 # fig, ax = plt.subplots(2)
 
@@ -34,43 +35,6 @@ import seaborn as sns
 # S0 = (SA * rho_limestone)  # specific surface area [1/cm]
 # porosity = (( permeability * S0_sand**2 ) / (constant) )**(1/tothepower)
 
-def get_samples_porosity(size):
-    # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
-    distributionPorosity = stats.lognorm(scale=0.2, s=0.5)
-    samplesPorosity = distributionPorosity.rvs(size=size)
-
-    return samplesPorosity
-
-def get_samples_permeability(porosity, size):
-    constant = np.random.uniform(low=10, high=100, size=size) #np.random.uniform(low=3.5, high=5.8, size=size)
-    tau = np.random.uniform(low=0.3, high=0.5, size=size)
-    tothepower = np.random.uniform(low=3, high=5, size=size)
-    rc = np.random.uniform(low=10e-6, high=30e-6, size=size)
-    SSA = 3/rc  #4 pi R**2 / (4/3) pi R**3
-
-    permeability = constant * tau**2 * ( porosity** tothepower / SSA ** 2 )
-    mu_per = np.mean(permeability)
-    stddv_per = np.var(permeability) ** 0.5
-    permeability_dis = stats.lognorm(scale=mu_per, s=0.5)
-    samplesPermeability = permeability_dis.rvs(size=size)
-
-    return samplesPermeability
-
-def plot_samples_porosity(distributionPorosity):
-    x1 = np.linspace(0, 1, 200)
-    ax[0].plot(x1, distributionPorosity.pdf(x1) * (max(x1) - min(x1)))
-    ax[0].set(xlabel='Porosity [-]', ylabel='Probability')
-    # ax[0].set_xscale('log')
-    plt.show()
-
-def plot_samples_permeability(distributionPermeability):
-    x2 = np.linspace(0, max(samplesPermeability), 200)
-    bin_centers1 = 0.5*(x2[1:] + x2[:-1])
-    ax[1].set(xlabel='Permeability K [m/s]', ylabel='Probability')
-    ax[1].plot(x2, permeability_dis.pdf(x2)*(max(x2)-min(x2)))
-    # ax[0].set_xscale('log')
-    # ax[1].set_xscale('log')
-    plt.show()
 
 # N=50
 # porosity = get_samples_porosity(N)
@@ -161,5 +125,4 @@ sns.kdeplot(df.Permeability, df.Porosity, n_levels=10, ax=ax)
 sns.rugplot(df.Permeability, color="g", ax=ax)
 sns.rugplot(df.Porosity, vertical=True, ax=ax)
 ax.set(xscale="log", xlabel='K [m^2]', ylabel='φ [-]')
-plt.show()
 # plt.show()

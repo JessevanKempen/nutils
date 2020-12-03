@@ -44,7 +44,7 @@ print('Running on PyMC3 v{}'.format(pm.__version__))
 
 basic_model = pm.Model()
 # import myUQ.py
-# import myFEM.py
+# import myFUQlib.py
 
 with basic_model:
 
@@ -67,7 +67,7 @@ with basic_model:
     # S0_sand = np.random.uniform(low=1.5e2, high=2.2e2, size=N)  # specific surface area [1/cm]
     # porosity = ((permeability * S0_sand ** 2) / (constant)) ** (1 / tothepower)
 
-    # Expected value of outcome (hier je uitkomst van je model) import myFEM.py
+    # Expected value of outcome (hier je uitkomst van je model) import myFUQlib.py
     mu = alpha + beta0 * X1 + beta1 * X2
     # print("Running FE model...")
     # p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, permeability, porosity)

@@ -2,6 +2,10 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import math
+from matplotlib import pyplot as plt
+from matplotlib import collections
+# import matplotlib.pyplot as plt
 from scipy import stats
 
 # sns.set(color_codes=True)
@@ -13,6 +17,8 @@ mu_K = math.log(5e-10)
 
 # create pdf plot
 x1 = np.linspace(0, 1e-8, 100)
+
+fig, ax = plt.subplots(1, 1, figsize=(10, 7), tight_layout=True)
 
 ax[0].plot(x1, frozen_lognorm.pdf(x1) * (max(x1) - min(x1)))
 # ax[0].hist(r1, bins=bin_centers1, density=density, histtype='stepfilled', alpha=0.2)
