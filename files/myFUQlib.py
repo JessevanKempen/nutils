@@ -32,6 +32,10 @@ class Aquifer:
         self.labda_s = aquifer['labda_s'] # thermal conductivity solid [W/mK]
         self.labda_l = aquifer['labda_l'] # thermal conductivity solid [W/mK]
         self.saltcontent = aquifer['saltcontent'] # [kg/l]
+        self.pref = aquifer['pref'] # initial reservoir pressure [Pa]
+        self.Tref = aquifer['Tref'] # initial reservoir temperature [K]
+        self.rw = aquifer['rw']
+        self.rmax = aquifer['rmax']
         self.g = 9.81 # gravity constant
 class Well:
 

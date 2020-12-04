@@ -6,6 +6,7 @@ from myFUQlib import *
 from myUQ import *
 # from myFUQ import *
 from myFUQlib import *
+from myFUQ import *
 from myModel import *
 
 #Ordering tools
@@ -27,7 +28,7 @@ N = 2
 
 # Define time of simulation
 timestep = 60
-endtime = 1800
+endtime = 180
 
 # Forward/Bayesian Inference calculation
 performInference = False
@@ -38,11 +39,14 @@ outfile = 'output/output_%d.png' % N
 #################### Core #########################
 # Generate text file for parameters
 generate_txt( "parameters.txt" )
-P_wellproducer = 225e5
+
+P_wellproducer = 225e5 # Variable well pressure (output FEA -> input doublet)
 
 # Import parameters.txt to variables
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
+print("aquifer parameters", params_aquifer)
+print("well parameters", params_well)
 
 # Construct the objects for the doublet model
 print("Constructing the doublet model...")
@@ -80,19 +84,18 @@ if not performInference:
         # p_model[index] = sol[0]
         # T_model[index] = sol[1]
 
-    # Run Finite Element Analysis (Forward)
-    print("\r\nRunning FEA...")
-
     # Set stoichastic parameters
     print("\r\nSetting stoichastic parameters...")
-    parametersRVS = generateRVSfromPDF(size)
+    parametersRVS = generateRVSfromPDF(N)
 
-    pmatrixwell = performFEA(parametersRVS, N, timestep, endtime)
+    # Run Finite Element Analysis (Forward)
+    print("\r\nRunning FEA...")
+    # pmatrixwell = performFEA(parametersRVS, N, timestep, endtime)
     #solFEA = performFEA(parameters, samplesize, timestep, endtime)
 
     # Run Analytical Analysis (Forward)
     print("\r\nRunning Analytical Analysis...")
-    solAA = performAA(parameters, samplesize, timestep, endtime)
+    solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
 
     ###########################
     # Post processing         #
@@ -214,8 +217,8 @@ else:
             # print("pdrawdown", pdrawdown)
             # print("pbuildup", pbuildup)
 
-            pmatrixwell[index, :] = parraywell
-            Tmatrixwell[index, :] = Tarraywell
+        pmatrixwell[index, :] = parraywell
+        Tmatrixwell[index, :] = Tarraywell
 
         #     p_model[index] = p_inlet
         #     T_model[index] = T_prod

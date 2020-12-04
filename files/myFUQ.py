@@ -14,40 +14,58 @@ from files.myModel import *
 
 #Forward Analysis
 
-def generateRVSfromPDF(size)
+def generateRVSfromPDF(size):
     Hpdf = H = np.random.uniform(low=90, high=110, size=size)
     φpdf = φ = get_samples_porosity(size)  # joined distribution
     Kpdf = K = get_samples_permeability(φpdf, size)  # joined distribution
     ctpdf = ct = np.random.uniform(low=1e-11, high=1e-9, size=size)
     Qpdf = Q = np.random.uniform(low=0.1, high=1.0, size=size)
     cspdf = cs = np.random.uniform(low=2400, high=2900, size=size)
-    print("random values", Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf)
-    print("random values transposed", Hpdf.T, φpdf.T, Kpdf.T, ctpdf.T, Qpdf.T, cspdf.T)
 
-    parametersRVS = [Hpdf.T, φpdf.T, Kpdf.T, ctpdf.T, Qpdf.T, cspdf.T]
+    parametersRVS = [Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf]
 
     return parametersRVS
 
-def performFEA(parameters, size, timestep, endtime):
-    """ Computes pressure and temperature at wellbore as a function of the sample size and total time
+def performFEA(params, aquifer, size, timestep, endtime):
+    """ Computes pressure and temperature at wellbore by finite element analysis
 
     Arguments:
-    size (float): sample size
-    endtime (float): total time
+    params(array):      model parameters
+    size (float):       sample size
+    timestep (float):   step size
+    endtime (float):    size of each period
     Returns:
-    P (matrix): value of pressure 2N x endtime
-    T (matrix): value of temperature 2N x endtime
+    P (matrix):         value of pressure 2N x endtime
+    T (matrix):         value of temperature 2N x endtime
     """
+
+    # Initialize parameters
+    Hpdf = params[0]
+    φpdf = params[1]
+    Kpdf = params[2]
+    ctpdf = params[3]
+    Qpdf = params[4]
+    cspdf = params[5]
+
+    # Calculate total number of time steps
+    t1 = round(endtime / timestep)
+    timeperiod = timestep * np.linspace(0, 2*t1, 2*t1+1)
+
+    # Initialize boundary conditions
+    rw = aquifer.rw #0.1
+    rmax = aquifer.rmax #1000
+    mu = aquifer.viscosity #0.31e-3
+    elems = 25
 
     # Construct empty containers
     pdrawdown = np.empty([size])
     pbuildup = np.empty([size])
-    pmatrixwell = np.zeros([size, 61])
-    Tmatrixwell = np.zeros([size, 61])
+    pmatrixwell = np.zeros([size, 2*t1+1])
+    Tmatrixwell = np.zeros([size, 2*t1+1])
 
     # Run forward model with finite element method
     for index in range(size):
-        parraywell, Tarraywell = main(degree=2, btype="spline", elems=25, rw=0.1, rmax=1000, H=Hpdf[index], mu=0.31e-3,
+        parraywell, Tarraywell = main(degree=2, btype="spline", elems=elems, rw=rw, rmax=rmax, H=Hpdf[index], mu=mu,
                              φ=φpdf[index], ctinv=1 / ctpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=timestep,
                              endtime=endtime)
         # pdrawdown[index] = parraywell[N]

@@ -20,13 +20,7 @@ def panalyticaldrawdown(ns, t1, R):
 
     pex = (ns.pref + pdifference).eval()
     return pex
-def dpanalyticaldrawdown(ns, t1, R):
-    ns = ns.copy_()
-    ns.eta = ns.K / (ns.φ * ns.ct)
-    ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
-    pgrad = (2 * ns.Jw * ei / (4 * math.pi * ns.K * R)).eval()
 
-    return pgrad
 def panalyticalbuildup(ns, endtime, t2, R):
     ns = ns.copy_()
     ns.eta = ns.K / (ns.φ * ns.ct)
@@ -39,6 +33,52 @@ def panalyticalbuildup(ns, endtime, t2, R):
     pexb = (ns.pref + pdifference).eval()
 
     return pexb
+
+def get_p_drawdown(H, φ, K, ct, Q, R, pref, t1period):
+    # Initialize parameters
+    Jw = Q / H
+    eta = K / (φ * ct)
+
+    # Initialize domain
+    # pref = domain[0]
+    # R = domain[1]
+
+    # Compute drawdown pressure
+    ei = sc.expi(-R ** 2 / (4 * eta * t1period))
+    print("exponential integral", ei)
+    pdifference = (Jw * ei / (4 * math.pi * K))
+    print("Flux at well", Jw) #compare to panalyticaldrawdown() which is correct
+    print("pressure difference", pdifference) #wrong, now -1.5e8
+    print("initial reservoir pressure", pref) #order of 2.25e7
+    pex = (pref + pdifference)
+
+    return pex
+
+def get_p_buildup(H, φ, K, ct, Q, R, pref, t1period, t2period):
+    # Initialize parameters
+    Jw = Q / H
+    eta = K / (φ * ct)
+
+    # Initialize domain
+    # pref = domain[0]
+    # R = domain[1]
+
+    # Compute buildup pressure
+    eid = sc.expi(-R ** 2 / (4 * eta * t1period[-1]))
+    eib = sc.expi(-R**2 / (4 * eta * t2period-t1period[-1]))
+    pdifference = (Jw * (eid - eib) / (4 * math.pi * K))
+    pexb = (pref + pdifference)
+
+    return pexb
+
+def dpanalyticaldrawdown(ns, t1, R):
+    ns = ns.copy_()
+    ns.eta = ns.K / (ns.φ * ns.ct)
+    ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
+    pgrad = (2 * ns.Jw * ei / (4 * math.pi * ns.K * R)).eval()
+
+    return pgrad
+
 def Tanalyticaldrawdown(ns, t1, R):
     ns = ns.copy_()
 
@@ -51,6 +91,7 @@ def Tanalyticaldrawdown(ns, t1, R):
     Tex = (ns.Tref - (ns.constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (ns.phieff - ns.constantjt ) * Tei).eval()
 
     return Tex
+
 def Tanalyticalbuildup(ns, endtime, t2, R):
     ns = ns.copy_()
     constantjt = ns.constantjt
@@ -101,33 +142,61 @@ def get_welldata(parameter):
     return np.array(df.loc[:, parameter]) #np.array(df['PRESSURE']), np.array(df['TEMPERATURE'])
 
 #Analysis
-def performAA(parameters, samplesize, timestep, endtime):
-    #pressure matrix
-    #pressure = panalyticaldrawdown + panalyticalbuildup
+# performFUQ(type"exact" or type "fea")
+
+def performAA(params, aquifer, size, timestep, endtime):
+    """ Computes pressure and temperature at wellbore by analytical analysis
+
+    Arguments:
+    params(array):      model parameters
+    size (float):       sample size
+    timestep (float):   step size
+    endtime (float):    size of each period
+    Returns:
+    P (matrix):         value of pressure 2N x endtime
+    T (matrix):         value of temperature 2N x endtime
+    """
+
+    # Initialize parameters
+    H = params[0]
+    φ = params[1]
+    K = params[2]
+    ct = params[3]
+    Q = params[4]
+    cs = params[5]
+
+    # Initialize boundary conditions
+    pref = aquifer.pref
+    rw = aquifer.rw
+    rmax = aquifer.rmax
+
+    # Calculate total number of time steps
+    t1 = round(endtime / timestep)
+    timeperiod = timestep * np.linspace(0, 2*t1, 2*t1+1)
+    t1period = timeperiod[0:t1+1]
+    t2period = timeperiod[t1+1:]
+
+    # Generate empty pressure array
+    pexact = np.zeros([size, 2*t1+1])
+    Texact = np.zeros([size, 2 * t1 + 1])
+
     # compute analytical solution
+    for index in range(size):
+        pexact[0, 0:t1+1] = get_p_drawdown(H[index], φ[index], K[index], ct[index], Q[index], rw, pref, t1period)
+        pexact[0, t1+1:] = get_p_buildup(H[index], φ[index], K[index], ct[index], Q[index], rw, pref, t1period, t2period)
+        print("index", index, H[index], φ[index], K[index], ct[index], Q[index])
+    print("exact pressure", pexact)
+
+    # parrayexact = panalyticaldrawdown(ns, paramspdf, timeperiod)
+    # Tarrayexact = Tanalyticaldrawdown(ns, t1)
+
+
     if time <= endtime:
-        pex = panalyticaldrawdown(ns, t1, ns.rw)
-        pgrad = dpanalyticaldrawdown(ns, t1, ns.rw)
-        parraywell[istep] = nanjoin(p, bezier.tri)[::100][0]  # p.take(bezier.tri.T, 0)[1][0]
-        # print(nanjoin(p, bezier.tri)[::100])
-        # print(p.take(bezier.tri.T, 0))
-        print("pwellFEA", parraywell[istep])
-        print("pwellEX", pex)
-        print("gradient pressure exact", pgrad)
-        print("gradient pressure", dp)
-        Qarray[istep] = Q
-        parrayexact[istep] = pex
+        Qarray = Q
+        panalyticaldrawdown(params, timeperiod1, R)
 
-        # print("pwellEX", parrayexact[istep])
-
-        # print("nanjoin x domain", len(nanjoin(x[:, 0], bezier.tri)))
-        # print("normal x domain", len(x[:, 0]))
-
-        Tex = Tanalyticaldrawdown(ns, t1, ns.rw)
-        Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
-        Tarrayexact[istep] = Tex
-        print("TwellFEA", Tarraywell[istep])
-        print("TwellEX", Tex)
+        # parrayexact = panalyticaldrawdown(params, paramspdf, timeperiod)
+        # Tarrayexact[istep] = Tanalyticaldrawdown(ns, t1, ns.rw)
 
         def plotdrawdown_1D():
             # export
@@ -152,18 +221,10 @@ def performAA(parameters, samplesize, timestep, endtime):
                 ax.legend(loc="center right")
 
     else:
-        pex2 = panalyticalbuildup(ns, endtime, t2, ns.rw)
-        parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
-        print("pwellFEA", parraywell[istep])
         Qarray[istep] = 0
-        parrayexact[istep] = pex2
-        print("pwellEX", pex2)
+        parrayexact[istep] = panalyticalbuildup(ns, endtime, t2, ns.rw)
+        Tarrayexact[istep] = Tanalyticalbuildup(ns, endtime, t2, ns.rw)
 
-        Tex2 = Tanalyticalbuildup(ns, endtime, t2, ns.rw)
-        Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
-        Tarrayexact[istep] = Tex2
-        print("TwellFEA", Tarraywell[istep])
-        print("TwellEX", Tex2)
 
         def plotbuildup_1D():
 
@@ -187,10 +248,5 @@ def performAA(parameters, samplesize, timestep, endtime):
                             0][0],
                         label="analytical")
                 ax.legend(loc="center right")
-
-
-
-    #temperature matrix
-    #temperature = tanalyticaldrawdown + tanalyticalbuildup
 
     return parrayAA, TarrayAA

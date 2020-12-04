@@ -37,7 +37,14 @@ def generate_txt( filename):
         'labda_s' : 4.2,
         'labda_l': 0.663,
         'saltcontent': 0.155, # [kg/l]
-        'g' : 9.81
+        'pref': 225e5,
+        'Tref': 90 + 273,
+        'g' : 9.81,
+        'rw': 0.1,
+        'rmax': 1000,
+        'porosity': 0.046,
+        'Q': 250 / 3600,
+        'L': 1000,
     })
     data['well'] = []
     data['well'].append({
