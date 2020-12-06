@@ -32,10 +32,10 @@ def generate_txt( filename):
         'rho_s': 2400,
         'viscosity': 0.0003142,
         'K': 4e-13,
-        'Cp_f' : 4183,
-        'Cp_s' : 870,
-        'labda_s' : 4.2,
-        'labda_l': 0.663,
+        'cpf' : 4183,
+        'cps' : 870,
+        'labdas' : 4.2, # thermal conductivity solid [W/mK]
+        'labdaf': 0.663, # thermal conductivity fluid [W/mK]
         'saltcontent': 0.155, # [kg/l]
         'pref': 225e5,
         'Tref': 90 + 273,

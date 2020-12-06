@@ -28,7 +28,8 @@ N = 2
 
 # Define time of simulation
 timestep = 60
-endtime = 180
+endtime = 120
+t1steps = round(endtime / timestep)
 
 # Forward/Bayesian Inference calculation
 performInference = False
@@ -40,8 +41,6 @@ outfile = 'output/output_%d.png' % N
 # Generate text file for parameters
 generate_txt( "parameters.txt" )
 
-P_wellproducer = 225e5 # Variable well pressure (output FEA -> input doublet)
-
 # Import parameters.txt to variables
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
@@ -52,15 +51,11 @@ print("well parameters", params_well)
 print("Constructing the doublet model...")
 aquifer = Aquifer(params_aquifer)
 well = Well(params_well, params_aquifer)
-doublet = DoubletGenerator(aquifer, well, P_wellproducer)
+doublet = DoubletGenerator(aquifer, well, aquifer.pref) #Initial well pressure at start
 
-# Evaluate the doublet model
-print("\r\nEvaluating numerical solution for the doublet model...")
-PumpTest(doublet)
-print("Pressure node 8", round(doublet.get_P_node8(well.D_in)/1e5,2), "bar")
-
+######## Forward Uncertainty Quantification #########
 if not performInference:
-    # Run Bayesian Forward Uncertainty Quantification
+    # Run Bayesian FUQ (input parameters not np. but pm. -> random values, as pdf not work in FEA -> output array of values -> mean, stdv -> pm. )
     import pymc3 as pm
     from pymc3.distributions import Interpolated
     print('Running on PyMC3 v{}'.format(pm.__version__))
@@ -68,72 +63,58 @@ if not performInference:
     # Run Forward Uncertainty Quantification
     print("Solving Forward Uncertainty Quantification...")
 
-    #input: stochastic variables
-    #system: myModel (input)
-    #output: pressure, temperature
-
-    # p_model = np.empty([N])
-    # T_model = np.empty([N])
-    # for index, (k, eps) in enumerate(zip(permeability, porosity)):
-    #     sol = DoubletFlow(aquifer, well, doublet, k, eps, timestep, endtime)
-    # pdrawdown[index] = parraywell[N]
-    # pbuildup[index] = parraywell[-1]
-    # print("pdrawdown", pdrawdown)
-    # print("pbuildup", pbuildup)
-
-        # p_model[index] = sol[0]
-        # T_model[index] = sol[1]
-
-    # Set stoichastic parameters
-    print("\r\nSetting stoichastic parameters...")
+    # Set input from stoichastic parameters
+    print("\r\nSetting input from stoichastic parameters...")
     parametersRVS = generateRVSfromPDF(N)
+    print("Stoichastic parameters", parametersRVS)
 
+    # Perform either FEA or FAA
     # Run Finite Element Analysis (Forward)
     print("\r\nRunning FEA...")
-    # pmatrixwell = performFEA(parametersRVS, N, timestep, endtime)
-    #solFEA = performFEA(parameters, samplesize, timestep, endtime)
+    solFEA = performFEA(parametersRVS, aquifer, N, timestep, endtime)
 
     # Run Analytical Analysis (Forward)
     print("\r\nRunning Analytical Analysis...")
     solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
 
+    # Output pressure matrix and temperature matrix
+    print("solution FEA", solFEA[0], "solution AA", solAA[0])
+
     ###########################
-    # Post processing         #
+    #     Post processing     #
     ###########################
-    # with open('pmatrix.npy', 'rb') as f:
-    #     a = np.load(f)
-    # print("a matrix", a)
+    with open('pmatrix.npy', 'rb') as f:
+        a = np.load(f)
+    print("saved FEA matrix", a)
 
-    # fig, ax = plt.subplots(1, 1,
-    #                        figsize=(10, 7),
-    #                        tight_layout=True)
-    #
-    # ax.set(xlabel='Wellbore pressure [Pa]', ylabel='Probability')
-    # ax.hist(pdrawdown, density=True, histtype='stepfilled', alpha=0.2, bins=20)
-    #
-    # plt.show()
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), tight_layout=True)
+    ax.set(xlabel='Wellbore pressure [Pa]', ylabel='Probability')
+    ax.hist(solFEA[0][:, t1steps], density=True, histtype='stepfilled', alpha=0.2, bins=20)
+    ax.hist(solAA[0][:, t1steps], density=True, histtype='stepfilled', alpha=0.2, bins=20)
 
-    # print("p_inlet", p_model, "T_outlet", T_model)
+    plt.show()
 
+    #histogram of point p8
+
+    #mean and standard deviation
     # Distribution of predicted P,T
-
     # mu_T = np.mean(T_model)
     # stddv_T = np.var(T_model) ** 0.5
     # mu_p = np.mean(p_model)
     # stddv_p = np.var(p_model) ** 0.5
-    # print("T_outlet mean", mu_T, "T_outlet sd", stddv_T)
-    # print("p_inlet mean", mu_p, "p_inlet sd", stddv_p)
 
     # Sobal 1st order sensitivity index with 10 parameters
     # for i in length(parameter):
     #     S(i) =  np.var(parameter(i)) / np.var(T_model)
 
+######## Inverse Uncertainty Quantification #########
 else:
     # Run Bayesian Inference
     import pymc3 as pm
     from pymc3.distributions import Interpolated
     print('Running on PyMC3 v{}'.format(pm.__version__))
-    #Amount of seperate chains
+
+    # Amount of seperate chains
     chains=4
 
     # True data
@@ -150,7 +131,6 @@ else:
     tothepower = np.random.uniform(low=3, high=5, size=N)
     Tau = (2) ** (1 / 2)
     S0_sand = np.random.uniform(low=1.5e2, high=2.2e2, size=N) # specific surface area [1/cm]
-
 
     # Mean of variables
     𝜇_H = 100
@@ -322,6 +302,15 @@ else:
         plt.title(param)
 
     plt.tight_layout();
+
+# Evaluate the doublet model
+print("\r\nEvaluating numerical solution for the doublet model...")
+pnode9 = solFEA[0][:, t1steps] #array with pressure after drawdown period
+print("pressure node 9", pnode9)
+doublet = DoubletGenerator(aquifer, well, pnode9)
+
+PumpTest(doublet)
+print("Pressure node 8", round(doublet.get_P_node8(well.D_in)/1e5,2), "bar")
 
 # Stop timing code execution
 t1 = time.time()

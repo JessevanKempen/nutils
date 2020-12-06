@@ -19,7 +19,7 @@ from files.myIOlib import *
 from files.myUQ import *
 from files.myModellib import *
 
-def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], endtime:unit['s']):
+def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], t1endtime:unit['s']):
     '''
     Fluid flow in porous media.
 
@@ -61,13 +61,13 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [60s]
          Time step.
 
-       endtime [600s]
+       t1endtime [600s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
 
     # define total time and steps
-    N = round(endtime / timestep)
+    N = round(t1endtime / timestep)
     timeperiod = timestep * np.linspace(0, 2*N, 2*N+1)
 
     # define vertices of radial grid
@@ -321,107 +321,43 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             plottopo = topo[:, :, 0:].boundary['back']
 
             ###########################
-            # Post processing         #
+            #     Post processing     #
             ###########################
 
             bezier = plottopo.sample('bezier', 7)
-
-            x, q, p = bezier.eval(['x_i', 'q_i', 'p'] @ ns, plhs=plhs)
-
-            T = bezier.eval(['T'] @ ns, Tlhs=Tlhs)
-            TT = T[0] #array in array
-            t1 = time
-            t2 = time - endtime
-
-            nanjoin = lambda array, tri: np.insert(array.take(tri.flat, 0).astype(float),
-                                                   slice(tri.shape[1], tri.size, tri.shape[1]), np.nan,
-                                                   axis=0)
+            x, q, p, T = bezier.eval(['x_i', 'q_i', 'p', 'T'] @ ns, plhs=plhs, Tlhs=Tlhs)
 
             # compute analytical solution
-            if time <= endtime:
-                pex = panalyticaldrawdown(ns, t1, ns.rw)
-                pgrad = dpanalyticaldrawdown(ns, t1, ns.rw)
-                parraywell[istep] = nanjoin(p, bezier.tri)[::100][0] #p.take(bezier.tri.T, 0)[1][0]
-                # print(nanjoin(p, bezier.tri)[::100])
-                # print(p.take(bezier.tri.T, 0))
-                print("pwellFEA", parraywell[istep])
-                print("pwellEX", pex)
-                print("gradient pressure exact", pgrad)
-                print("gradient pressure", dp)
+            if time <= t1endtime:
                 Qarray[istep] = Q
-                parrayexact[istep] = pex
 
-                # print("pwellEX", parrayexact[istep])
+                parrayexact[istep] = panalyticaldrawdown(ns, time, ns.rw)
+                parraywell[istep] = nanjoin(p, bezier.tri)[::100][0]
+                print("pwellFEA", parraywell[istep], "pwellEX", parrayexact[istep])
 
-                # print("nanjoin x domain", len(nanjoin(x[:, 0], bezier.tri)))
-                # print("normal x domain", len(x[:, 0]))
+                # pgrad = dpanalyticaldrawdown(ns, t1, ns.rw)                 # print("gradient pressure exact", pgrad)                 # print("gradient pressure", dp)
 
-                Tex = Tanalyticaldrawdown(ns, t1, ns.rw)
-                Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
-                Tarrayexact[istep] = Tex
-                print("TwellFEA", Tarraywell[istep])
-                print("TwellEX", Tex)
+                Tarrayexact[istep]= Tanalyticaldrawdown(ns, time, ns.rw)
+                Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
+                print("TwellFEA", Tarraywell[istep], "TwellEX", Tarrayexact[istep])
 
-                def plotdrawdown_1D():
-                    #export
-                    with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                        ax = plt.subplots()
-                        ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                        ax.set_ylim([20,23])
-                        ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100]/1e6, label="FEM")
-                        ax.plot(x[:, 0][::100],
-                                np.array(panalyticaldrawdown(ns, t1, x[:, 0]))[0][0][0][::100]/1e6,
-                                label="analytical")
-                        ax.legend(loc="center right")
-
-                    with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                        ax = plt.subplots()
-                        ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10], nanjoin(TT, bezier.tri)[0:100000:10], label="FEM")
-                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10],
-                                np.array(Tanalyticaldrawdown(ns, t1, nanjoin(x[:, 0], bezier.tri)))[0][0][0][0:100000:10],
-                                label="analytical")
-
-                        ax.legend(loc="center right")
+                # plotdrawdown_1D(ns, bezier, x, p, T, t1)
 
             else:
-                pex2 = panalyticalbuildup(ns, endtime, t2, ns.rw)
-                parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
-                print("pwellFEA", parraywell[istep])
                 Qarray[istep] = 0
-                parrayexact[istep] = pex2
-                print("pwellEX", pex2)
 
-                Tex2 = Tanalyticalbuildup(ns, endtime, t2, ns.rw)
-                Tarraywell[istep] = TT.take(bezier.tri.T, 0)[1][0]
-                Tarrayexact[istep] = Tex2
-                print("TwellFEA", Tarraywell[istep])
-                print("TwellEX", Tex2)
+                parrayexact[istep] = panalyticalbuildup(ns, t1endtime, time, ns.rw)
+                parraywell[istep] = p.take(bezier.tri.T, 0)[1][0]
+                print("pwellFEA", parraywell[istep], "pwellEX", parrayexact[istep])
 
-                def plotbuildup_1D():
 
-                    with export.mplfigure('pressure1d.png', dpi=800) as plt:
-                        ax = plt.subplots()
-                        ax.set(xlabel='Distance [m]', ylabel='Pressure [MPa]')
-                        ax.plot(nanjoin(x[:, 0], bezier.tri)[::100], nanjoin(p, bezier.tri)[::100] / 1e6, label="FEM")
-                        ax.plot(x[:, 0][::100],
-                                np.array(panalyticalbuildup(ns, endtime, t2, x[:, 0]))[0][0][0][
-                                ::100] / 1e6, label="analytical")
-                        ax.legend(loc="center right")
+                Tarrayexact[istep] = Tanalyticalbuildup(ns, t1endtime, time, ns.rw)
+                Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
+                print("TwellFEA", Tarraywell[istep], "TwellEX", Tarrayexact[istep])
 
-                    with export.mplfigure('temperature1d.png', dpi=800) as plt:
-                        ax = plt.subplots()
-                        ax.set(xlabel='Distance [m]', ylabel='Temperature [K]')
-                        # ax.set_ylim([362.85, 363.02])
-                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10], nanjoin(TT, bezier.tri)[0:100000:10],
-                                label="FEM")
-                        ax.plot(nanjoin(x[:, 0], bezier.tri)[0:100000:10],
-                                np.array(Tanalyticalbuildup(ns, endtime, t2, nanjoin(x[:, 0], bezier.tri)[0:100000:10]))[0][
-                                    0][0],
-                                label="analytical")
-                        ax.legend(loc="center right")
+                # plotbuildup_1D(ns, bezier, x, p, T, t1endtime, t2)
 
-            if time >= 2*endtime: #export
+            if time >= 2*t1endtime: #export
                 parrayerror = np.abs(np.subtract(parraywell, parrayexact))
                 # with export.mplfigure('pressure.png', dpi=800) as fig:
                 #     ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -451,40 +387,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 #             label="analytical")
                 #     ax.legend(loc="center right")
 
-                with export.mplfigure('pressuretime.png', dpi=800) as plt:
-                    ax1 = plt.subplots()
-                    ax2 = ax1.twinx()
-                    ax1.set(xlabel='Time [s]')
-                    ax1.set_ylabel('Pressure [MPa]', color='b')
-                    ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
-                    ax1.plot(timeperiod, parraywell/1e6, 'bo', label="FEM")
-                    ax1.plot(timeperiod, parrayexact/1e6, label="analytical")
-                    # ax1.plot(timeperiod, parrayexp, label="NLOG")
-                    ax1.legend(loc="center right")
-                    ax2.plot(timeperiod, Qarray, 'k')
-
-                # with export.mplfigure('pressuretimeerror.png', dpi=800) as plt:
-                #     ax1 = plt.subplots()
-                #     ax2 = ax1.twinx()
-                #     ax1.set(xlabel='Time [s]')
-                #     ax1.set(ylabel=r'$\left(\left|p_{w}-{p}_{w,exact}\right|/\left|p_{w,0}\right|\right)$', yscale="log")
-                #     ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
-                #     ax1.plot(timeperiod, parrayerror / 225e5, 'bo', label=r'$r_{dr} = 1000m$ refined mesh')
-                #     ax1.set_ylim(ymin=0.00005)
-                #     ax1.legend(loc="center right")
-                #     ax2.plot(timeperiod, Qarray, 'k')
-
-                with export.mplfigure('temperaturetime.png', dpi=800) as plt:
-                    ax1 = plt.subplots()
-                    ax2 = ax1.twinx()
-                    # ax1.set_ylim([362.9, 363.1])
-                    ax1.set(xlabel='Time [s]')
-                    ax1.set_ylabel('Temperature [K]', color='b')
-                    ax2.set_ylabel('Volumetric flow rate [m^3/s]', color='k')
-                    ax1.plot(timeperiod, Tarraywell, 'ro', label="FEM")
-                    ax1.plot(timeperiod, Tarrayexact, label="analytical")
-                    ax1.legend(loc="center right")
-                    ax2.plot(timeperiod, Qarray, 'k')
+                # plotovertime(timeperiod, parraywell, parrayexact, Tarraywell, Tarrayexact, Qarray)
 
                 # mesh
                 # bezier = plottopo.sample('bezier', 2)
@@ -514,8 +417,6 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             #     fig.colorbar(im)
 
         return parraywell, Tarraywell
-
-
 
     # with treelog.iter.plain(
     #         'timestep', solver.impliciteuler(['lhsp', 'lhsT'], (respd, resT), (pinertia, Tinertia), timetarget='t', timestep=timestep, arguments=dict(lhsp=pdofs0, lhsT=Tdofs0), constrain=(dict(lhsp=consp, lhsT=consT)), newtontol=newtontol)) as steps:
@@ -554,7 +455,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     #         print("exact well temperature", Tex)
     #         # print("data well temperature", Tarrayexp[istep])
     #
-    #         if time >= endtime:
+    #         if time >= t1endtime:
     #
     #             with export.mplfigure('pressure.png', dpi=800) as fig:
     #                 ax = fig.add_subplot(111, title='pressure', aspect=1)
@@ -655,7 +556,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     #         print("exact well temperature", Tex2)
     #         # print("data well temperature", Tarrayexp[N+istep])
     #
-    #         if time >= endtime:
+    #         if time >= t1endtime:
     #
     #             with export.mplfigure('pressure.png', dpi=800) as fig:
     #                 ax = fig.add_subplot(111, title='pressure', aspect=1)

@@ -26,7 +26,7 @@ def generateRVSfromPDF(size):
 
     return parametersRVS
 
-def performFEA(params, aquifer, size, timestep, endtime):
+def performFEA(params, aquifer, size, timestep, t1endtime):
     """ Computes pressure and temperature at wellbore by finite element analysis
 
     Arguments:
@@ -43,58 +43,40 @@ def performFEA(params, aquifer, size, timestep, endtime):
     Hpdf = params[0]
     φpdf = params[1]
     Kpdf = params[2]
-    ctpdf = params[3]
+    ctinvpdf = 1/params[3]
     Qpdf = params[4]
     cspdf = params[5]
 
     # Calculate total number of time steps
-    t1 = round(endtime / timestep)
+    t1 = round(t1endtime / timestep)
     timeperiod = timestep * np.linspace(0, 2*t1, 2*t1+1)
 
     # Initialize boundary conditions
     rw = aquifer.rw #0.1
     rmax = aquifer.rmax #1000
-    mu = aquifer.viscosity #0.31e-3
+    mu = aquifer.mu #0.31e-3
     elems = 25
 
     # Construct empty containers
-    pdrawdown = np.empty([size])
-    pbuildup = np.empty([size])
     pmatrixwell = np.zeros([size, 2*t1+1])
     Tmatrixwell = np.zeros([size, 2*t1+1])
 
     # Run forward model with finite element method
     for index in range(size):
-        parraywell, Tarraywell = main(degree=2, btype="spline", elems=elems, rw=rw, rmax=rmax, H=Hpdf[index], mu=mu,
-                             φ=φpdf[index], ctinv=1 / ctpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=timestep,
-                             endtime=endtime)
+        pmatrixwell[index, :], Tmatrixwell[index, :] = main(degree=2, btype="spline", elems=elems, rw=rw, rmax=rmax, H=Hpdf[index], mu=mu,
+                             φ=φpdf[index], ctinv=ctinvpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=timestep,
+                             t1endtime=t1endtime)
+
         # pdrawdown[index] = parraywell[N]
         # pbuildup[index] = parraywell[-1]
         # print("pdrawdown", pdrawdown)
         # print("pbuildup", pbuildup)
 
-        pmatrixwell[index, :] = parraywell
-        Tmatrixwell[index, :] = Tarraywell
-
-        # save pressure after each timestep for each run, export array from main()
+        # save array after each timestep for each run, export matrix from main()
         # save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
-
         with open('pmatrix.npy', 'wb') as f:
             np.save(f, pmatrixwell)
 
         # np.savetxt('data.csv', (col1_array, col2_array, col3_array), delimiter=',')
 
-    ###########################
-    # Post processing         #
-    ###########################
-    with open('pmatrix.npy', 'rb') as f:
-        a = np.load(f)
-    print("a matrix", a)
-
-    fig, ax = plt.subplots(1, 1, figsize=(10, 7), tight_layout=True)
-    ax.set(xlabel='Wellbore pressure [Pa]', ylabel='Probability')
-    ax.hist(pdrawdown, density=True, histtype='stepfilled', alpha=0.2, bins=20)
-
-    plt.show()
-
-    return pmatrixwell
+    return pmatrixwell, Tmatrixwell

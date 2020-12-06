@@ -23,20 +23,21 @@ class Aquifer:
         self.H = aquifer['H']         # np.random.uniform(low=55, high=140) #aquifer['H']  # thickness aquifer
         self.T_surface = aquifer['T_surface']
         self.porosity = aquifer['porosity']
-        self.rho_f = aquifer['rho_f']
-        self.rho_s = aquifer['rho_s']
+        self.rhof = aquifer['rho_f']
+        self.rhos = aquifer['rho_s']
         self.mu = aquifer['viscosity']
         self.K = aquifer['K']
-        self.Cp_f = aquifer['Cp_f'] # water heat capacity
-        self.Cp_s = aquifer['Cp_s'] #heat capacity limestone [J/kg K]
-        self.labda_s = aquifer['labda_s'] # thermal conductivity solid [W/mK]
-        self.labda_l = aquifer['labda_l'] # thermal conductivity solid [W/mK]
+        self.cpf = aquifer['cpf'] # water heat capacity
+        self.cps = aquifer['cps'] #heat capacity of stone type (limestone) [J/kg K]
+        self.labdas = aquifer['labdas'] # thermal conductivity solid [W/mK]
+        self.labdaf = aquifer['labdaf'] # thermal conductivity solid [W/mK]
         self.saltcontent = aquifer['saltcontent'] # [kg/l]
         self.pref = aquifer['pref'] # initial reservoir pressure [Pa]
         self.Tref = aquifer['Tref'] # initial reservoir temperature [K]
         self.rw = aquifer['rw']
         self.rmax = aquifer['rmax']
         self.g = 9.81 # gravity constant
+
 class Well:
 
     def __init__(self, well, aquifer):
@@ -47,147 +48,155 @@ class Well:
         self.Ti_inj = well['Ti_inj']  # initial temperature of injection well (reinjection temperature)
         self.porosity = well['porosity']
         self.mdot = self.Q * aquifer['rho_f']
-        self.D_in = 2 * self.r
+        self.D = 2 * self.r
         self.A_well =  2 * np.pi * self.r
+
 class DoubletGenerator:
     """Generates all properties for a doublet
 
     Args:
 
     """
-    def __init__(self, aquifer, well, P_wellproducer):
+    def __init__(self, aquifer, well, pnode9):
 
+        # Initialize parameters
         self.aquifer = aquifer
         self.well = well
-
-        self.cp = aquifer.Cp_f # water heat capacity
-        self.labdas = aquifer.labda_s # thermal conductivity solid [W/mK]
-        self.cps = aquifer.Cp_s #heat capacity limestone [J/kg K]
-        self.g = aquifer.g # gravity constant
         self.time = 365*24*60*60 #1 year [s]
-        self.mdot = well.mdot
-        self.lpipe = self.aquifer.d_top + 0.5 * self.aquifer.H
-
-        self.Dx = self.well.L * 3  # domain of x
-        self.Dy = - (2 * self.aquifer.d_top + self.aquifer.H)  # domain of y
-        self.Nx = 24  # number of nodes by x
-        self.Ny = 10  # number of nodes by y
-        self.nNodes = self.Nx * self.Ny  # total number of nodes
-        self.ne = (self.Nx - 1) * (self.Ny - 1)
-        self.dx = self.Dx / self.Nx  # segment length of x
-        self.dy = self.Dy / self.Ny  # segment length of y
-        self.domain = np.array([self.dx, self.dy])
-        # self.x_grid, self.y_grid = self._make_grid()
-        # self.x_well, self.y_well = self._construct_well()
-        # self.nodes_grid = self._make_nodes_grid()
-        # self.coordinate_grid = self._make_coordinates_grid()
-
-        self.P_pump = self._get_P_pump()
-        self.T_aqproducer = self._get_T(self.lpipe)
-        self.P_aqproducer = self._get_P(self.lpipe, self.T_aqproducer)
-        self.P_aqinjector = self._get_P(self.lpipe, self.well.Ti_inj)
-        self.T_wellbore = self.T_aqproducer
-        self.P_wellproducer = P_wellproducer #self._get_P_wb(self.P_aqproducer, self.T_wellbore)
-        self.P_wellinjector = self._get_P_wb(self.P_aqinjector, self.well.Ti_inj)
-
-
+        self.patm = 1e5
+        self.z = self.lpipe = self.aquifer.d_top + 0.5 * self.aquifer.H
         self.lpipe_divide = np.linspace(self.lpipe, 0, 200)
-        self.q_heatloss_pipe = self._get_T_heatloss_pipe(self.well.D_in, self.lpipe_divide)
-        self.P_HE = self.get_P_HE(self.well.D_in)
-        self.T_HE = self._get_T_HE(self.well.D_in, self.lpipe_divide)
-        self.Power_HE = self.mdot * self.cp * (self.T_HE - self.well.Ti_inj)
 
-        # self.P_grid = self._compute_P_grid()
-        # self.T_grid = self._compute_T_grid()
+        # Set pump specs
+        self.effpump = 0.61 # Efficiency of pump [-]
+        self.Ppump = 2.671e5 # Power of pump [W]
 
-    # def _get_gaussian_points
-    def _compute_T_grid(self):
-        T_grid = self._get_T(-self.y_grid)
-        # P_grid[self.Ny/2][self.Nx/3] = self.P_wellbore
-        # P_grid[5][16] = self.P_wellbore
-        # P_grid[4][16] = self.P_wellbore
-        T_grid[5][8] = self.well.Ti_inj
-        T_grid[4][8] = self.well.Ti_inj
+        # Evaluate objects within doublet
+        self.T_wellbore = self.T_aqproducer = self._get_T(self.lpipe)
+        self.P_aqproducer = self._get_pgz(self.patm, self.lpipe, self.T_aqproducer)
+        self.P_aqinjector = self._get_pgz(self.patm, self.lpipe, self.well.Ti_inj)
 
-        return T_grid
+        self.q_heatloss_pipe = self._get_T_heatloss_pipe(self.lpipe_divide)
+        self.T_HE = self._get_T_HE(self.lpipe_divide)
+        self.Power_HE = self.well.mdot * self.aquifer.cpf * (self.T_HE - self.well.Ti_inj)
 
-    def _compute_P_grid(self):
-        P_grid = self._get_P(-self.y_grid)
-        # P_grid[self.Ny/2][self.Nx/3] = self.P_wellbore
-        P_grid[5][16] = self.P_wellbore
-        P_grid[4][16] = self.P_wellbore
-        P_grid[5][8] = self.P_wellbore
-        P_grid[4][8] = self.P_wellbore
+        # Evaluate pnodes within doublet
+        self.pnode10 = self.P_aqproducer # pref when based on depth
+        self.pnode9 = pnode9
+        self.pnode8 = self.get_pnode8(self.pnode9)
+        self.pnode6 = self.pnode7 = self.get_pnode7(self.pnode8)
+        self.pnode4 = self.pnode5 = self.pnode6
+        self.pnode3 = self.get_pnode3(self.pnode4)
+        self.pnode2 = self.get_pnode2(self.pnode3)
+        self.pnode1 = self.P_aqinjector # pref when based on depth and injection temperature
 
-        return P_grid
+        # Evaluate objects
+        self.P_HE = self.pnode6
+        self.P_pump = self._get_ppump(self.Ppump, self.well.Q)
 
-    def _get_P_pump(self):
-        P_pump = 20e5
+    # def get_P_HE(self, D_in):
+    #     P_HE = self.P_wellproducer - self._get_P(self.aquifer.d_top + 0.5 * self.aquifer.H, self.T_aqproducer) -\
+    #     ( self._get_f( D_in) * self.aquifer.rhof * self.get_v_avg( D_in ) * (self.aquifer.d_top + 0.5 * self.aquifer.H) ) / 2 * D_in\
+    #            + self.P_pump
+    #
+    #     return P_HE
 
-        return P_pump
+    def get_pnode8(self, pnode9):
+        pnode8 = pnode9 - self._get_pgz(self.patm, self.z, self.T_aqproducer) - self._get_pfriction(self.z)
 
-    def get_P_HE(self, D_in):
-        P_HE = self.P_wellproducer - self._get_P(self.aquifer.d_top + 0.5 * self.aquifer.H, self.T_aqproducer) -\
-        ( self._get_f( D_in) * self.aquifer.rho_f * self.get_v_avg( D_in ) * (self.aquifer.d_top + 0.5 * self.aquifer.H) ) / 2 * D_in\
-               + self.P_pump
+        return pnode8
 
-        return P_HE
+    def get_pnode7(self, pnode8):
+        pnode7 = pnode8 + self._get_ppump(self.Ppump, self.well.Q)
 
-    def get_P_node8(self, D_in):
-        P_node8 = self.P_wellproducer - self._get_P(0.5 * self.aquifer.d_top + 0.5 * self.aquifer.H, self.T_HE) -\
-        ( self._get_f( D_in) * self.aquifer.rho_f * self.get_v_avg( D_in ) * (self.aquifer.d_top + 0.5 * self.aquifer.H) ) / 2 * D_in\
+        return pnode7
 
-        return P_node8
+    def get_pnode3(self, pnode4):
+        pnode3 = pnode4 - self._get_ppump(self.Ppump, self.well.Q)
 
-    def _get_T_heatloss_pipe(self, D_in, length_pipe):
-        alpha = self.labdas / ( self.aquifer.rho_s * self.cps) #thermal diffusion of rock
+        return pnode3
+
+    def get_pnode2(self, pnode3):
+        pnode2 = pnode3 + self._get_pgz(self.patm, self.z, self.T_aqproducer) + self._get_pfriction(self.z)
+
+        return pnode2
+
+    def _get_ppump(self, Ppump, Q):
+        ppump = Ppump / (Q * self.effpump) # appropiate value is 20e5 Pa
+
+        return ppump
+
+    def _get_pgz(self, patm, z, T):
+        """ Computes pressure of the aquifer as a function of the depth, temperature and pressure
+
+        Arguments:
+        z (float): depth (downwards from groundlevel is positive)
+        Returns:
+        p (float): value of pressure
+        """
+        pgz = patm + self.aquifer.g * self.aquifer.rhof * z                 # density as a constant
+        pgz = patm + self.aquifer.g * self.rho(T, pgz) * z   # density as a function of temperature and pressure
+
+        return pgz
+
+    def _get_pfriction(self, z):
+        pfriction = (self._get_f() * self.aquifer.rhof * self.get_vmean(self.well.Q) * z) / 2 * self.well.D
+
+        return pfriction
+
+    def _get_T_heatloss_pipe(self, length_pipe):
+        alpha = self.aquifer.labdas / ( self.aquifer.rhos * self.aquifer.cps) #thermal diffusion of rock
         gamma = 0.577216 #euler constant
 
-        q_heatloss_pipe = 4 * math.pi * self.labdas * ( self.T_wellbore - self._get_T(length_pipe) ) / math.log( ( 4 * alpha * self.time ) / (math.exp(gamma) * (D_in/2)**2 ) )
+        q_heatloss_pipe = 4 * math.pi * self.aquifer.labdas * ( self.T_wellbore - self._get_T(length_pipe) ) / math.log( ( 4 * alpha * self.time ) / (math.exp(gamma) * (self.well.D/2)**2 ) )
 
         return q_heatloss_pipe
 
-    def _get_T_HE(self, D_in, length_pipe):
+    def _get_T_HE(self, length_pipe):
         T_HE = self.T_wellbore
 
         for i in range(len(length_pipe)-1):
-            T_HE -= length_pipe[-2] * self.q_heatloss_pipe[i] / ( self.mdot * self.cp )
+            T_HE -= length_pipe[-2] * self.q_heatloss_pipe[i] / ( self.well.mdot * self.aquifer.cpf )
 
         return T_HE
 
     # def _get_Power_HE(self):
     #     eta = 0.61
-    #     Power_HE = (self.T_HE - well.Ti_inj) * well.Q * aquifer.rho_f * eta
+    #     Power_HE = (self.T_HE - well.Ti_inj) * well.Q * aquifer.rhof * eta
     #
     #     return Power_HE
 
-    def _get_f(self, D_in):
-        f = ( 1.14 - 2 * math.log10( self.well.porosity / D_in + 21.25 / ( self.get_Re( D_in )**0.9 ) ) )**-2
+    def _get_f(self):
+        f = ( 1.14 - 2 * math.log10( self.well.porosity / self.well.D + 21.25 / ( self.get_Re( self.get_vmean(self.well.Q) )**0.9 ) ) )**-2
+
         return f
 
-    def get_v_avg(self, D_in):
-        v_avg = 4 * self.well.Q / ( math.pi * ( D_in ** 2 ) )
-        return v_avg
+    def get_vmean(self, Q):
+        vmean = 4 * Q / ( math.pi * ( self.well.D ** 2 ) )
 
-    def get_Re(self, D_in):
-        Re = ( self.aquifer.rho_f * self.get_v_avg( D_in ) ) / self.aquifer.mu
+        return vmean
+
+    def get_Re(self, vmean):
+        Re = ( self.aquifer.rhof * vmean ) / self.aquifer.mu
+
         return Re
 
-    def _get_P_wb(self, P_aquifer, T_aquifer):
-        """ Computes pressure at wellbore
-
-        Arguments:
-        d (float): depth (downwards from groundlevel is positive)
-        Returns:
-        P_wb (float): value of pressure at well bore
-        """
-        if P_aquifer == self.P_aqproducer:
-            Q = -self.well.Q
-        else:
-            Q = self.well.Q
-
-        P_wb = P_aquifer + ( ( Q * self.mu(T_aquifer, P_aquifer) ) / ( 2 * math.pi * self.aquifer.K * self.aquifer.H ) ) * np.log ( self.well.L / self.well.r)
-        return P_wb
+    # Theis solution, temperature and pressure as a function of depth
+    # def _get_P_wb(self, P_aquifer, T_aquifer):
+    #     """ Computes pressure at wellbore
+    #
+    #     Arguments:
+    #     d (float): depth (downwards from groundlevel is positive)
+    #     Returns:
+    #     P_wb (float): value of pressure at well bore
+    #     """
+    #     if P_aquifer == self.P_aqproducer:
+    #         Q = -self.well.Q
+    #     else:
+    #         Q = self.well.Q
+    #
+    #     P_wb = P_aquifer + ( ( Q * self.mu(T_aquifer, P_aquifer) ) / ( 2 * math.pi * self.aquifer.K * self.aquifer.H ) ) * np.log ( self.well.L / self.well.r)
+    #     return P_wb
 
     def _get_T(self, d):
         """ Computes temperature of the aquifer as a function of the depth
@@ -200,26 +209,12 @@ class DoubletGenerator:
         T = self.aquifer.T_surface + d * self.aquifer.labda
         return T
 
-    def _get_P(self, d, T):
-        """ Computes pressure of the aquifer as a function of the depth, temperature and pressure
-
-        Arguments:
-        d (float): depth (downwards from groundlevel is positive)
-        Returns:
-        P (float): value of pressure
-        """
-        P_atm = 1e5
-        Pwater = P_atm + self.g * self.aquifer.rho_f * d                 # density as a constant
-        Pwater = P_atm + self.g * self.rho(T, Pwater) * d   # density as a function of temperature and pressure
-        print(Pwater, self.rho(self._get_T(d), Pwater))
-
-        return Pwater
-
+    # Thermophysical properties
     def rho(self, Twater, Pwater):
         # rho = (1 + 10e-6 * (-80 * T - 3.3 * T**2 + 0.00175 * T**3 + 489 * p - 2 * T * p + 0.016 * T**2 * p - 1.3e-5 * T**3\
         #                    * p - 0.333 * p**2 - 0.002 * T * p**2) )
         rho = PropsSI('D', 'T', Twater, 'P', Pwater, 'IF97::Water')
-        # rho = self.aquifer.rho_f * (1 - 3.17e-4 * (Twater - 298.15) - 2.56e-6 * (Twater - 298.15) ** 2)
+        # rho = self.aquifer.rhof * (1 - 3.17e-4 * (Twater - 298.15) - 2.56e-6 * (Twater - 298.15) ** 2)
 
         return rho
 
@@ -229,70 +224,107 @@ class DoubletGenerator:
 
         return mu
 
-    def _make_nodes_grid(self):
-        """ Compute a nodes grid for the doublet
+        ## Graphical variables for GUI ##
+        # self.Dx = self.well.L * 3  # domain of x
+        # self.Dy = - (2 * self.aquifer.d_top + self.aquifer.H)  # domain of y
+        # self.Nx = 24  # number of nodes by x
+        # self.Ny = 10  # number of nodes by y
+        # self.nNodes = self.Nx * self.Ny  # total number of nodes
+        # self.ne = (self.Nx - 1) * (self.Ny - 1)
+        # self.dx = self.Dx / self.Nx  # segment length of x
+        # self.dy = self.Dy / self.Ny  # segment length of y
+        # self.domain = np.array([self.dx, self.dy])
+        # self.x_grid, self.y_grid = self._make_grid()
+        # self.x_well, self.y_well = self._construct_well()
+        # self.nodes_grid = self._make_nodes_grid()
+        # self.coordinate_grid = self._make_coordinates_grid()
+        # self.P_grid = self._compute_P_grid()
+        # self.T_grid = self._compute_T_grid()
+    # def _get_gaussian_points
+    # def _compute_T_grid(self):
+    #     T_grid = self._get_T(-self.y_grid)
+    #     # P_grid[self.Ny/2][self.Nx/3] = self.P_wellbore
+    #     # P_grid[5][16] = self.P_wellbore
+    #     # P_grid[4][16] = self.P_wellbore
+    #     T_grid[5][8] = self.well.Ti_inj
+    #     T_grid[4][8] = self.well.Ti_inj
+    #
+    #     return T_grid
 
-        Returns:
-        x_grid_nodes, y_grid_nodes (np.array): arrays of the domain in x and y direction
-        """
-        i = np.arange(0, self.Nx+1, 1)
-        j = np.arange(0, -self.Ny-1, -1)
+    # def _compute_P_grid(self):
+    # P_grid = self._get_P(-self.y_grid)
+    # # P_grid[self.Ny/2][self.Nx/3] = self.P_wellbore
+    # P_grid[5][16] = self.P_wellbore
+    # P_grid[4][16] = self.P_wellbore
+    # P_grid[5][8] = self.P_wellbore
+    # P_grid[4][8] = self.P_wellbore
+    #
+    # return P_grid
 
-        i_coords, j_coords = np.meshgrid(i, j)
+    # def _make_nodes_grid(self):
+    #     """ Compute a nodes grid for the doublet
+    #
+    #     Returns:
+    #     x_grid_nodes, y_grid_nodes (np.array): arrays of the domain in x and y direction
+    #     """
+    #     i = np.arange(0, self.Nx+1, 1)
+    #     j = np.arange(0, -self.Ny-1, -1)
+    #
+    #     i_coords, j_coords = np.meshgrid(i, j)
+    #
+    #     nodes_grid = np.array([i_coords, j_coords])
+    #
+    #     return nodes_grid
 
-        nodes_grid = np.array([i_coords, j_coords])
+    # def _make_coordinates_grid(self):
+    #     coordinates_grid = self.nodes_grid
+    #
+    #     coordinates_grid[0,:,:] = self.nodes_grid[0,:,:] * self.domain[0]
+    #     coordinates_grid[1,:,:] = self.nodes_grid[1,:,:] * -self.domain[1]
+    #
+    #     return coordinates_grid
 
-        return nodes_grid
+    # def _make_grid(self):
+    #     """ Compute a cartesian grid for the doublet
+    #
+    #     Returns:
+    #     domain (np.array): array of the domain in x and y direction
+    #     """
+    #     x = np.linspace(0, self.well.L * 3, self.Nx)
+    #     y = np.linspace(0,- (2 * self.aquifer.d_top + self.aquifer.H) , self.Ny)
+    #     x_grid, y_grid = np.meshgrid(x, y)
+    #
+    #     return x_grid, y_grid
 
-    def _make_coordinates_grid(self):
-        coordinates_grid = self.nodes_grid
-
-        coordinates_grid[0,:,:] = self.nodes_grid[0,:,:] * self.domain[0]
-        coordinates_grid[1,:,:] = self.nodes_grid[1,:,:] * -self.domain[1]
-
-        return coordinates_grid
-
-    def _make_grid(self):
-        """ Compute a cartesian grid for the doublet
-
-        Returns:
-        domain (np.array): array of the domain in x and y direction
-        """
-        x = np.linspace(0, self.well.L * 3, self.Nx)
-        y = np.linspace(0,- (2 * self.aquifer.d_top + self.aquifer.H) , self.Ny)
-        x_grid, y_grid = np.meshgrid(x, y)
-
-        return x_grid, y_grid
-
-    def _construct_well(self):
-        """ Compute two wells for the doublet
-
-        Returns:
-        x_well, y_well (np.array): array of the x and y of the well
-        """
-        # x = np.array([[self.well.L * 5 - self.well.L * 0.5], [self.well.L * 5 + self.well.L * 0.5]])
-        # y = np.linspace(0,- (self.aquifer.d_top + self.aquifer.H) , (20 * self.Ny) - 1)
-        x_well = np.array([[self.x_grid[0][math.floor(self.Nx/3)]], [self.x_grid[0][2*math.floor(self.Nx/3)]]])
-        y_well = self.y_grid[math.floor(self.Ny/2)][0] * np.ones(2)
-
-        return x_well, y_well
+    # def _construct_well(self):
+    #     """ Compute two wells for the doublet
+    #
+    #     Returns:
+    #     x_well, y_well (np.array): array of the x and y of the well
+    #     """
+    #     # x = np.array([[self.well.L * 5 - self.well.L * 0.5], [self.well.L * 5 + self.well.L * 0.5]])
+    #     # y = np.linspace(0,- (self.aquifer.d_top + self.aquifer.H) , (20 * self.Ny) - 1)
+    #     x_well = np.array([[self.x_grid[0][math.floor(self.Nx/3)]], [self.x_grid[0][2*math.floor(self.Nx/3)]]])
+    #     y_well = self.y_grid[math.floor(self.Ny/2)][0] * np.ones(2)
+    #
+    #     return x_well, y_well
 
 #Forward Analysis
 def PumpTest(doublet):
     print("\r\n############## Analytical values model ##############\n"
-          "m_dot:           ", round(doublet.mdot), "Kg/s\n"
-          "P_aq,i:          ", round(doublet.P_aqinjector/1e5,2), "Bar\n"
-          "P_aq,p:          ", round(doublet.P_aqproducer/1e5,2), "Bar\n"                                                     
-          "P_bh,i:          ", round(doublet.P_wellinjector/1e5,2), "Bar\n"
-          "P_bh,p:          ", round(doublet.P_wellproducer/1e5,2), "Bar\n"
+          "m_dot:           ", round(doublet.well.mdot), "Kg/s\n"
+          "pnode1/p_aq,i:   ", round(doublet.P_aqinjector/1e5,2), "Bar\n"
+          "pnode10/p_aq,p:  ", round(doublet.P_aqproducer/1e5,2), "Bar\n"                                                     
+          "pnode2/p_bh,i:   ", doublet.P_wellinjector/1e5, "Bar\n"
+          "pnode9/p_bh,p:   ", doublet.P_wellproducer/1e5, "Bar\n"
           "T_bh,p:          ", round(doublet.T_wellbore-273), "Celcius\n"
-          "P_out,p/P_in,HE: ", round(doublet.P_HE/ 1e5,2), "Bar\n"
-          "P_pump,p:        ", 0.5*doublet.P_pump/ 1e5, "Bar\n"
-          "P_pump,i:        ", 0.5*doublet.P_pump/ 1e5, "Bar\n"
+          "pnode6/p_in,HE:  ", round(doublet.P_HE/ 1e5,2), "Bar\n"
+          "p_pump,p/p_pump,i:", 0.5*doublet.P_pump/ 1e5, "Bar\n"
           "T_out,p/T_in,HE: ", round(doublet.T_HE-273,2), "Celcius\n"
-          "P_in,i/P_out,HE: ", round(doublet.P_HE/ 1e5,2), "Bar\n"
+          "pnode5/p_out,HE: ", round(doublet.P_HE/ 1e5,2), "Bar\n"
           "T_in,i/T_out,HE: ", doublet.well.Ti_inj-273, "Celcius\n"
           "Power,HE:        ", round(doublet.Power_HE/1e6,2), "MW")
+
 # ## Finite element thermo-hydraulic model
 #
 # def DoubletFlow(aquifer, well, doublet, k, porosity, timestep, endtime):
@@ -338,7 +370,7 @@ def PumpTest(doublet):
 #     ns.Tin = doublet.well.Ti_inj
 #     ns.Tout = doublet.T_HE
 #     ns.T0 = doublet.T_HE
-#     ns.ρf = aquifer.rho_f
+#     ns.ρf = aquifer.rhof
 #     ns.ρ = ns.ρf #* (1 - 3.17e-4 * (ns.T - 298.15) - 2.56e-6 * (ns.T - 298.15)**2)  #no lhsT in lhsp
 #     ns.lambdl = aquifer.labda_l #'thermal conductivity liquid [W/mK]'
 #     ns.lambds = aquifer.labda_s #'thermal conductivity solid [W/mK]'
