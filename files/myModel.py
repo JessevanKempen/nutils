@@ -98,17 +98,17 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
 
     # problem variables         # unit           # level up library
     ns.Q = Q                    # [m^3/s]
-    ns.cf = 4200                # [J/kg K]       # aquifer.Cp_f
-    ns.cs = 2650                # [J/kg K]       # aquifer.Cp_s
-    ns.ρf = 1000                # [kg/m^3]       # aquifer.rho_f        # ns.ρf = PropsSI('D', 'T', ns.T.eval(), 'P', ns.p.eval(), 'IF97::Water') # note to self: temperature dependency
-    ns.ρs = 2400                # [kg/m^3]       # aquifer.rho_s
-    ns.λf = 0.663               # [W/mk]         # aquifer.labda_l
-    ns.λs = 4.2                 # [W/mk]         # aquifer.labda_s
+    ns.cf = 4200                # [J/kg K]       # aquifer.cpf
+    ns.cs = 2650                # [J/kg K]       # aquifer.cps
+    ns.ρf = 1000                # [kg/m^3]       # aquifer.rhof        # ns.ρf = PropsSI('D', 'T', ns.T.eval(), 'P', ns.p.eval(), 'IF97::Water') # note to self: temperature dependency
+    ns.ρs = 2400                # [kg/m^3]       # aquifer.rhos
+    ns.λf = 0.663               # [W/mk]         # aquifer.labdaf
+    ns.λs = 4.2                 # [W/mk]         # aquifer.labdas
     ns.g = 9.81                 # [m/s^2]        # aquifer.g            # ns.ge_i = '<0,-g, 0>_i'
     ns.H = H                    # [m]
     ns.rw = rw                  # [m]
     ns.rmax = rmax              # [m]
-    ns.φ = φ                    # [-]            # aquifer.porosity
+    ns.φ = φ                    # [-]            # aquifer.φ
     ns.Jw = ns.Q / ns.H        # [m^2/s]
     ns.mu = mu
     ns.ct = 1/ctinv
@@ -245,6 +245,10 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ns.mu = mu
             ns.q_i  = '-(  k  / mu ) p_,i'
             ns.qh_i = '-λ T_,i'
+            print((ns.r[1]-ns.r[0]).eval())                         # find smallest element size h next to inner boundary
+            strength = 0.5                                          # set strength
+            ns.ε = strength * abs(ns.r[1]-ns.r[0]) * ns.ρf * ns.cf  # calculate artificial diffusion
+            # ns.qh_i = '-(λ + ε) T_,i'                             # set in weak formulation
             ns.v    = 'Q / Aw'
             ns.pref = 225e5     # [Pa]
             ns.Tref = 90 + 273  # [K]

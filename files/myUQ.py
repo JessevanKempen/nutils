@@ -102,27 +102,33 @@ def listOfTuples(l1, l2):
 
 import plotly.figure_factory as ff
 import plotly.express as px
-N=500
-porosity = get_samples_porosity(N)
-permeability = get_samples_permeability(porosity, N)
 
-df = pd.DataFrame(listOfTuples(permeability, porosity), columns=["Permeability", "Porosity"])
+#################### Uncertainty Quantification #########################
+# N=500
+# porosity = get_samples_porosity(N)
+# permeability = get_samples_permeability(porosity, N)
+#
+# df = pd.DataFrame(listOfTuples(permeability, porosity), columns=["Permeability", "Porosity"])
+#
+# f, ax = plt.subplots(figsize=(6, 6))
+# sns.kdeplot(df.Permeability, df.Porosity, n_levels=10, ax=ax)
+# sns.rugplot(df.Permeability, color="g", ax=ax)
+# sns.rugplot(df.Porosity, vertical=True, ax=ax)
+# ax.set(xscale="log", xlabel='K [m^2]', ylabel='φ [-]')
+
 
 # fig = px.histogram(df, x="Permeability", y="Porosity",
 #                    marginal="box",  # or violin, rug
 #                    hover_data=df.columns)
 # fig.show()
 
-f, ax = plt.subplots(figsize=(6, 6))
+
 # sns.jointplot(x="Permeability", y="Porosity", ax=ax, data=df, kind="kde", n_levels=10);
 
 # # plot waaier
 # sns.lineplot(
 #     data=fmri, x="timepoint", y="signal", hue="event", err_style="bars", ci=95
 # )
-
-sns.kdeplot(df.Permeability, df.Porosity, n_levels=10, ax=ax)
-sns.rugplot(df.Permeability, color="g", ax=ax)
-sns.rugplot(df.Porosity, vertical=True, ax=ax)
-ax.set(xscale="log", xlabel='K [m^2]', ylabel='φ [-]')
 # plt.show()
+
+#################### Inverse Uncertainty Quantification #########################

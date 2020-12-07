@@ -11,32 +11,8 @@ sns.set_style("whitegrid")
 
 from myModel import *
 from myUQ import *
-from myFEM import *
 
-def show_plot():
-    with open('pmatrix.npy', 'rb') as f:
-      data = np.transpose(np.load(f))
-
-    df = pd.DataFrame(data[0:, 0:], columns=['f' + str(i) for i in range(data.shape[1])])
-
-    print(df)
-
-    draw_df = df.reset_index().melt(id_vars=['index'], var_name='col')
-
-    # pass custom palette:
-    ax = sns.lineplot(x='index',
-                     y='value',
-                     ci=95,
-                     style=True,
-                     dashes=[(2,2)],
-                     legend=False,
-                     palette=("Blues_d"), #sns.color_palette('Greys')
-                     hue_norm=mpl.colors.LogNorm(),
-                     data=draw_df)
-    plt.xlabel("time [min]", size=10)
-    plt.ylabel("pressure [Pa]", size=10)
-    plt.show()
-
+# can be removed
 def perform_MCMC():
     # user input
     size = 2
@@ -88,24 +64,3 @@ def perform_MCMC():
     ax.hist(pdrawdown, density=True, histtype='stepfilled', alpha=0.2, bins=20)
 
     plt.show()
-
-def show_uniformplot():
-    Qpdf = Q = np.random.uniform(low=0.1, high=1.0, size=50)
-
-    fig, ax = plt.subplots(1, 1,
-                                figsize=(10, 7),
-                                tight_layout=True)
-
-    ax.set(xlabel=r'$Q [m^3/s]$', ylabel='Probability')
-    ax.hist(Q, density=True, histtype='stepfilled', alpha=0.2, bins=20)
-    plt.show()
-
-def calculate_deterministic(P_wellproducer):
-    aquifer = Aquifer(params_aquifer)
-    well = Well(params_well, params_aquifer)
-    doublet = DoubletGenerator(aquifer, well, P_wellproducer)
-    PumpTest(doublet)
-
-    print("Pressure node 8", round(doublet.get_P_node8(well.D_in)/1e5,2), "bar")
-
-show_plot()

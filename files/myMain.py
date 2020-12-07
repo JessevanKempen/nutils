@@ -24,11 +24,11 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 2
+N = 50
 
 # Define time of simulation
 timestep = 60
-endtime = 120
+endtime = 1800
 t1steps = round(endtime / timestep)
 
 # Forward/Bayesian Inference calculation
@@ -44,14 +44,11 @@ generate_txt( "parameters.txt" )
 # Import parameters.txt to variables
 print("Reading model parameters...")
 params_aquifer, params_well = read_from_txt( "parameters.txt" )
-print("aquifer parameters", params_aquifer)
-print("well parameters", params_well)
 
 # Construct the objects for the doublet model
 print("Constructing the doublet model...")
 aquifer = Aquifer(params_aquifer)
-well = Well(params_well, params_aquifer)
-doublet = DoubletGenerator(aquifer, well, aquifer.pref) #Initial well pressure at start
+doublet = DoubletGenerator(aquifer, aquifer.pref) #Initial well pressure at start
 
 ######## Forward Uncertainty Quantification #########
 if not performInference:
@@ -114,8 +111,8 @@ else:
     from pymc3.distributions import Interpolated
     print('Running on PyMC3 v{}'.format(pm.__version__))
 
-    # Amount of seperate chains
-    chains=4
+    # Amount of chains
+    chains = 4
 
     # True data
     permeability_true = 2.2730989084434785e-08
@@ -124,8 +121,6 @@ else:
     # Observed data
     T_data = stats.norm(loc=89.94, scale=0.05).rvs(size=N)
     p_data = stats.norm(loc=244, scale=0.05).rvs(size=N)
-    print("length data", len(T_data))
-    print("length data 2", len(stats.norm(loc=89.94, scale=1e-6).rvs(size=N)+1))
 
     constant = np.random.uniform(low=3.5, high=5.8, size=N)
     tothepower = np.random.uniform(low=3, high=5, size=N)
@@ -133,26 +128,24 @@ else:
     S0_sand = np.random.uniform(low=1.5e2, high=2.2e2, size=N) # specific surface area [1/cm]
 
     # Mean of variables
-    𝜇_H = 100
-    𝜇_φ = 0.3
-    𝜇_ct = 1e-10
-    𝜇_Q = 0.5
-    𝜇_cs = 2650
+    𝜇_H = aquifer.H
+    𝜇_φ = aquifer.φ
+    𝜇_ct = aquifer.ct
+    𝜇_Q = aquifer.Q
+    𝜇_cs = aquifer.cs
 
     with pm.Model() as PriorModel:
 
-        # Priors for unknown model parameters (import myUQ.py)
-        Hpdf = H = pm.Normal('porosity', mu=𝜇_H , sd=0.025)
-        φpdf = φ = pm.Lognormal('porosity', mu=math.log(𝜇_φ), sd=0.24) #joined distribution
+        # Priors for unknown model parameters
+        Hpdf = H = pm.Normal('H', mu=𝜇_H , sd=0.025)
+        φpdf = φ = pm.Lognormal('por', mu=math.log(𝜇_φ), sd=0.24) #joined distribution
+        K_samples = constant * (φ.random(size=N) ** tothepower / S0_sand ** 2)
+        Kpdf = K = pm.Lognormal('K', mu=math.log(np.mean(K_samples)), sd=1) #joined distribution
+        ctpdf = ct = pm.Normal('ct', mu=𝜇_ct , sd=0.025)
+        Qpdf = Q = pm.Normal('Q', mu=𝜇_Q , sd=0.025)
+        cspdf = cs = pm.Normal('cs', mu=𝜇_cs , sd=0.025)
 
-        porosity_samples = φ.random(size=N)
-        permeability_samples = constant * (porosity_samples ** tothepower / S0_sand ** 2)
-        mu_per = np.mean(permeability_samples)
-
-        Kpdf = K = pm.Lognormal('permeability', mu=math.log(mu_per), sd=1) #joined distribution
-        ctpdf = ct = pm.Normal('porosity', mu=𝜇_ct , sd=0.025)
-        Qpdf = Q = pm.Normal('porosity', mu=𝜇_Q , sd=0.025)
-        cspdf = cs = pm.Normal('porosity', mu=𝜇_cs , sd=0.025)
+        parametersRVS = [Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf]
 
         # permeability = pm.Lognormal('permeability', mu=math.log(9e-9), sd=0.025)
         #
@@ -180,46 +173,29 @@ else:
 
         # p_model = np.empty([N])
         # T_model = np.empty([N])
-        # bar = 1e5
 
         #Hier moeten meerdere variable.random(size=N) in de for loop. Hoe?
         #Uit alle verdelingen boven een array vormen met waardes, en dan hier in stoppen
 
-        # for index, (k, epsilon) in enumerate(zip(permeability.random(size=N), porosity_samples)):
-        #     p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, epsilon, timestep, endtime)
+        # Run Analytical Analysis (Backward)
+        # Run Analytical Analysis (Backward)
+        print("\r\nRunning Analytical Analysis... (Backward)")
+        solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
+        pdrawdown = solAA[0][:, t1steps]
 
-        # Run Finite Element Analysis (Backward)
-        # insert code
-
-
-            # pdrawdown[index] = parraywell[N]
-            # pbuildup[index] = parraywell[-1]
-            # print("pdrawdown", pdrawdown)
-            # print("pbuildup", pbuildup)
-
-        pmatrixwell[index, :] = parraywell
-        Tmatrixwell[index, :] = Tarraywell
-
-        #     p_model[index] = p_inlet
-        #     T_model[index] = T_prod
-        #
-        # mu_p = np.mean(p_model)
-        # stddv_p = np.var(p_model) ** 0.5
-        # mu_T = np.mean(T_model)
-        # stddv_T = np.var(T_model) ** 0.5
+        mu_p = np.mean(pdrawdown)
+        stddv_p = np.var(pdrawdown) ** 0.5
 
         # Likelihood (sampling distribution) of observations
-        # T_obs = pm.Normal('T_obs', mu=mu_T, sd=10, observed=T_data)
         p_obs = pm.Normal('p_obs', mu=mu_p, sd=10, observed=p_data)
 
     with PriorModel:
         # Inference
         start = pm.find_MAP()                      # Find starting value by optimization
         step = pm.NUTS(scaling=start)              # Instantiate MCMC sampling algoritm
-
         #pm.Metropolis()   pm.GaussianRandomWalk()
 
-        trace = pm.sample(1000, start=start, step=step, cores=1, chains=chains) # Draw 1000 posterior samples using NUTS sampling
+        trace = pm.sample(1000, start=start, step=step, cores=1, chains=chains) # Draw 1000 posterior samples
         # print("length posterior", len(trace['permeability']), trace.get_values('permeability', combine=True), len(trace.get_values('permeability', combine=True)))
 
     print(az.summary(trace))
@@ -227,30 +203,11 @@ else:
     chain_count = trace.get_values('permeability').shape[0]
     # T_pred = pm.sample_posterior_predictive(trace, samples=chain_count, model=m0)
     data_spp = az.from_pymc3(trace=trace)
-
-    joint_plt = az.plot_joint(data_spp, var_names=['permeability', 'porosity'], kind='kde', fill_last=False);
-
-    trace_fig = az.plot_trace(trace,
-     var_names=[ 'permeability', 'porosity'],
-     figsize=(12, 8));
+    joint_plt = az.plot_joint(data_spp, var_names=['K', 'por'], kind='kde', fill_last=False);
+    trace_fig = az.plot_trace(trace, var_names=[ 'K', 'por'], figsize=(12, 8));
     # pm.traceplot(trace, varnames=['permeability', 'porosity'])
 
     plt.show()
-
-    def from_posterior(param, samples, k=100):
-        smin, smax = np.min(samples), np.max(samples)
-        width = smax - smin
-        x = np.linspace(smin, smax, k)
-        y = stats.gaussian_kde(samples)(x)
-        # print("x", x)
-        # print("y", y)
-        # print("samples", samples)
-        # print("param", param)
-        # what was never sampled should have a small probability but not 0,
-        # so we'll extend the domain and use linear approximation of density on it
-        x = np.concatenate([[x[0] - 3 * width], x, [x[-1] + 3 * width]])
-        y = np.concatenate([[0], y, [0]])
-        return Interpolated(param, x, y)
 
     traces = [trace]
 
@@ -258,34 +215,44 @@ else:
 
         with pm.Model() as InferenceModel:
             # Priors are posteriors from previous iteration
-            permeability = from_posterior('permeability', trace['permeability'])
-            porosity = from_posterior('porosity', trace['porosity'])
-            print("permeability inference", permeability, 'porosity inference', porosity_samples)
+            H = from_posterior('H', trace['H'])
+            φ = from_posterior('por', trace['por'])
+            K = from_posterior('K', trace['K'])
+            ct = from_posterior('ct', trace['ct'])
+            Q = from_posterior('Q', trace['Q'])
+            cs = from_posterior('cs', trace['cs'])
 
-            p_posterior = np.empty(N)
-            T_posterior = np.empty(N)
+            parametersRVS = [H, φ, K, ct, Q, cs]
 
-            for index, (k, eps) in enumerate(zip(permeability.random(size=N), porosity.random(size=N))):
-                p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, eps)
-                print("index", index)
-                p_posterior[index] = p_inlet
-                # print(p_inlet)
-                # print("temperature", t)
-                T_posterior[index] = T_prod
+            # p_posterior = np.empty(N)
+            # T_posterior = np.empty(N)
+            # for index, (k, eps) in enumerate(zip(permeability.random(size=N), porosity.random(size=N))):
+            #     p_inlet, T_prod = DoubletFlow(aquifer, well, doublet, k, eps)
+            #     p_posterior[index] = p_inlet
+            #     T_posterior[index] = T_prod
 
-            print("mean pressure", np.mean(p_posterior), "mean temperature", np.mean(T_posterior))
-            mu_p = np.mean(p_posterior)
-            stddv_p = np.var(p_posterior) ** 0.5
-            mu_T = np.mean(T_posterior)
-            stddv_T = np.var(T_posterior) ** 0.5
+            # Run Analytical Analysis (Backward)
+            print("\r\nRunning Analytical Analysis... (Backward)")
+            solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
+            pposterior = solAA[0][:, t1steps]
+
+            print("mean pressure", np.mean(pposterior))
+            mu_p = np.mean(pposterior)
+            stddv_p = np.var(pposterior) ** 0.5
+            # mu_T = np.mean(T_posterior)
+            # stddv_T = np.var(T_posterior) ** 0.5
 
             # Likelihood (sampling distribution) of observations
-            T_obs = pm.Normal('T_obs', mu=mu_T, sd=1, observed=T_data)
             p_obs = pm.Normal('p_obs', mu=mu_p, sd=1, observed=p_data)
+            # T_obs = pm.Normal('T_obs', mu=mu_T, sd=1, observed=T_data)
 
             # draw 1000 posterior samples
-            trace = pm.sample(1000, cores=1, chains= chains)
+            trace = pm.sample(1000, cores=1, chains=chains)
             traces.append(trace)
+
+    ###########################
+    #     Post processing     #
+    ###########################
 
     print('Posterior distributions after ' + str(len(traces)) + ' iterations.')
     cmap = mpl.cm.autumn
@@ -305,26 +272,27 @@ else:
 
 # Evaluate the doublet model
 print("\r\nEvaluating numerical solution for the doublet model...")
-pnode9 = solFEA[0][:, t1steps] #array with pressure after drawdown period
-print("pressure node 9", pnode9)
-doublet = DoubletGenerator(aquifer, well, pnode9)
-
-PumpTest(doublet)
-print("Pressure node 8", round(doublet.get_P_node8(well.D_in)/1e5,2), "bar")
+doublet = DoubletGenerator(aquifer, solFEA[0], parametersRVS, t1steps*2+1)
+evaluateDoublet(doublet)
 
 # Stop timing code execution
-t1 = time.time()
-print("CPU time        [s]          : ", t1 - t0)
+t2 = time.time()
+print("CPU time        [s]          : ", t2 - t0)
 
 # Stop timing code execution
 print("\r\nDone. Post-processing...")
 
 #################### Postprocessing #########################
 
-# Postprocessing
+# save array after each timestep for each run, export matrix from main()
+# save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
+with open('pnode9.npy', 'wb') as f9:
+    np.save(f9, doublet.pnode9)
+
+with open('pnode8.npy', 'wb') as f8:
+    np.save(f8, doublet.pnode8)
+
 # plot_solution(sol, outfile)
-# plot last FEM
-# plot 4 probability density functions
 
 plt.show()
 
