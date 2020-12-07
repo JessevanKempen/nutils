@@ -61,7 +61,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
        timestep [60s]
          Time step.
 
-       t1endtime [600s]
+       t1endtime [300s]
          Number of time steps per timeperiod (drawdown or buildup).
 
     '''
@@ -244,11 +244,11 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ns.k  = k_int
             ns.mu = mu
             ns.q_i  = '-(  k  / mu ) p_,i'
-            ns.qh_i = '-λ T_,i'
-            print((ns.r[1]-ns.r[0]).eval())                         # find smallest element size h next to inner boundary
-            strength = 0.5                                          # set strength
-            ns.ε = strength * abs(ns.r[1]-ns.r[0]) * ns.ρf * ns.cf  # calculate artificial diffusion
-            # ns.qh_i = '-(λ + ε) T_,i'                             # set in weak formulation
+            # ns.qh_i = '-λ T_,i'
+            ns.hmin = (rverts[1]-rverts[0])
+            strength = 0.9                                          # set strength
+            ns.ε = strength * ns.hmin * ns.ρf * ns.cf               # calculate artificial diffusion
+            ns.qh_i = '-(λ + ε) T_,i'                             # set in weak formulation
             ns.v    = 'Q / Aw'
             ns.pref = 225e5     # [Pa]
             ns.Tref = 90 + 273  # [K]
@@ -345,7 +345,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
                 print("TwellFEA", Tarraywell[istep], "TwellEX", Tarrayexact[istep])
 
-                # plotdrawdown_1D(ns, bezier, x, p, T, t1)
+                plotdrawdown_1D(ns, bezier, x, p, T, time)
 
             else:
                 Qarray[istep] = 0
@@ -359,7 +359,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
                 Tarraywell[istep] = T.take(bezier.tri.T, 0)[1][0]
                 print("TwellFEA", Tarraywell[istep], "TwellEX", Tarrayexact[istep])
 
-                # plotbuildup_1D(ns, bezier, x, p, T, t1endtime, t2)
+                plotbuildup_1D(ns, bezier, x, p, T, t1endtime, time)
 
             if time >= 2*t1endtime: #export
                 parrayerror = np.abs(np.subtract(parraywell, parrayexact))

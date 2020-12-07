@@ -24,11 +24,11 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 50
+N = 2
 
 # Define time of simulation
 timestep = 60
-endtime = 1800
+endtime = 180
 t1steps = round(endtime / timestep)
 
 # Forward/Bayesian Inference calculation
@@ -286,14 +286,14 @@ print("\r\nDone. Post-processing...")
 
 # save array after each timestep for each run, export matrix from main()
 # save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
-with open('pnode9.npy', 'wb') as f9:
-    np.save(f9, doublet.pnode9)
-
-with open('pnode8.npy', 'wb') as f8:
-    np.save(f8, doublet.pnode8)
+# with open('pnode9.npy', 'wb') as f9:
+#     np.save(f9, doublet.pnode9)
+#
+# with open('pnode8.npy', 'wb') as f8:
+#     np.save(f8, doublet.pnode8)
 
 # plot_solution(sol, outfile)
 
-plt.show()
+# plt.show()
 
 

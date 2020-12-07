@@ -69,8 +69,8 @@ def performFEA(params, aquifer, size, timestep, t1endtime):
 
         # save array after each timestep for each run, export matrix from main()
         # save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
-        with open('pmatrix.npy', 'wb') as f:
-            np.save(f, pmatrixwell)
+        # with open('pmatrix.npy', 'wb') as f:
+        #     np.save(f, pmatrixwell)
 
         # np.savetxt('data.csv', (col1_array, col2_array, col3_array), delimiter=',')
 

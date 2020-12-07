@@ -137,6 +137,7 @@ def show_seaborn_plot( filename, label):
     draw_df = df.reset_index().melt(id_vars=['index'], var_name='col')
 
     # pass custom palette:
+    sns.set_palette("Spectral")
     ax = sns.lineplot(x='index',
                      y='value',
                      ci=95,
@@ -161,7 +162,5 @@ def show_uniform_plot():
     ax.hist(Q, density=True, histtype='stepfilled', alpha=0.2, bins=20)
     plt.show()
 
-show_seaborn_plot('pnode9.npy', "node9")
-show_seaborn_plot('pnode8.npy', "node8")
-
-plt.show()
+# show_seaborn_plot('pnode8.npy', "node8")
+# plt.show()
