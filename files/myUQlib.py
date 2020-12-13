@@ -1,6 +1,7 @@
 #################### Uncertainty Quantification Library #########################
 from scipy import stats
 import numpy as np, treelog
+from pymc3.distributions import Interpolated
 
 def get_samples_porosity(size):
     # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data

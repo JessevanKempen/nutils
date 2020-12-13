@@ -38,14 +38,14 @@ def generate_txt( filename):
         'dsensor': 2196,
         'labda': 0.031,
         'Tsurface': 20+273,
-        'porosity': 0.2,
+        'porosity': 0.2,                #'porosity': 0.046,
         'permeability': 9e-10,
         'rhof': 996.9,
         'rhos': 2400,
         'viscosity': 0.0003142,
         'K': 4e-13,
         'cpf' : 4183,
-        'cps' : 870,
+        'cps' : 2650, #870
         'labdas' : 4.2, # thermal conductivity solid [W/mK]
         'labdaf': 0.663, # thermal conductivity fluid [W/mK]
         'saltcontent': 0.155, # [kg/l]
@@ -54,14 +54,12 @@ def generate_txt( filename):
         'g' : 9.81,
         'rw': 0.1, #0.126
         'rmax': 1000,
-        'porosity': 0.046,
         'Q': 250 / 3600,
         'L': 1000,
         'Tinj': 30 + 273,
         'patm' : 1e5,
          'ε' : 1.2,     # tubing roughness [m]
         'ct' : 1e-10,   # total compressibility
-        'cs' : 2650     # total heat capacity
 
     })
     data['well'] = []

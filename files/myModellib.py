@@ -46,6 +46,36 @@ def get_p_buildup(H, φ, K, ct, Q, R, pref, t1end, t2):
 
     return pexb
 
+def get_dp_drawdown(H, φ, K, ct, Q, R, t1):
+    # Initialize parameters
+    Jw = Q / H
+    eta = K / (φ * ct)
+
+    # Initialize domain
+    # pref = domain[0]
+    # R = domain[1]
+
+    # Compute drawdown gradient pressure
+    ei = sc.expi(-R ** 2 / (4 * eta * t1))
+    pgrad = (2 * Jw * ei / (4 * math.pi * K * R))
+
+    return pgrad, sd_p
+
+def get_dp_buildup(H, φ, K, ct, Q, R, pref, t1end, t2):
+    # Initialize parameters
+    Jw = Q / H
+    eta = K / (φ * ct)
+
+    # Initialize domain
+    # pref = domain[0]
+    # R = domain[1]
+
+    # Compute drawdown gradient pressure
+    ei = sc.expi(-R ** 2 / (4 * eta * t1))
+    pgrad = (2 * Jw * ei / (4 * math.pi * K * R))
+
+    return pgrad
+
 #Analytical solutions modified for FEA
 def panalyticaldrawdown(ns, t1, R):
     # Initialize parameters
@@ -77,7 +107,7 @@ def panalyticalbuildup(ns, t1end, t2, R):
 def dpanalyticaldrawdown(ns, t1, R):
     ns = ns.copy_()
     ns.eta = ns.K / (ns.φ * ns.ct)
-    ei = sc.expi((-R**2 / (4 * ns.eta * t1)).eval())
+    ei = sc.expi((-R ** 2 / (4 * ns.eta * t1)).eval())
     pgrad = (2 * ns.Jw * ei / (4 * math.pi * ns.K * R)).eval()
 
     return pgrad

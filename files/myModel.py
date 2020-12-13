@@ -19,7 +19,7 @@ from files.myIOlib import *
 from files.myUQ import *
 from files.myModellib import *
 
-def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], t1endtime:unit['s']):
+def main(aquifer, degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], t1endtime:unit['s']):
     '''
     Fluid flow in porous media.
 
@@ -81,52 +81,52 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
         inner=topo.boundary['left'], outer=topo.boundary['right'])
     topo = topo.withboundary(
         strata=topo.boundary-topo.boundary['inner,outer'])
-    assert (topo.boundary['inner'].sample('bezier', 2).eval(geom[0]) == rw).all(), "Invalid inner boundary condition"
-    # assert (topo.boundary['outer'].sample('bezier', 2).eval(geom[0]) == rmax).all(), "Invalid outer boundary condition"
+    assert (topo.boundary['inner'].sample('bezier', 2).eval(geom[0]) == rw).all(),   "Invalid inner boundary condition"
+    assert (topo.boundary['outer'].sample('bezier', 2).eval(geom[0]) == rmax).all(), "Invalid outer boundary condition"
 
     ns = function.Namespace()
     ns.r, ns.z, ns.θ = geom
     ns.x_i = '<r cos(θ), z, r sin(θ)>_i'
 
-    ns.pbasis = topo.basis('spline', degree=(1, 1, 0))  # periodic basis function constant
-    ns.Tbasis = topo.basis('spline', degree=(1, 1, 0))  # periodic basis function constant
+    # set periodic basis function constant
+    ns.pbasis = topo.basis('spline', degree=(1, 1, 0))
+    ns.Tbasis = topo.basis('spline', degree=(1, 1, 0))
 
     # retrieve the well boundary
     ns.Aw = topo.boundary['inner'].integrate("d:x"@ns, degree=1)
-    ns.Aw2 = 2 * math.pi * rw * H# [m^2]
+    ns.Aw2 = 2 * math.pi * rw * H
     assert (np.round_(ns.Aw.eval() - ns.Aw2.eval()) == 0), "Area of inner boundary does not match"
 
-    # problem variables         # unit           # level up library
+    # problem variables         # unit
     ns.Q = Q                    # [m^3/s]
-    ns.cf = 4200                # [J/kg K]       # aquifer.cpf
-    ns.cs = 2650                # [J/kg K]       # aquifer.cps
-    ns.ρf = 1000                # [kg/m^3]       # aquifer.rhof        # ns.ρf = PropsSI('D', 'T', ns.T.eval(), 'P', ns.p.eval(), 'IF97::Water') # note to self: temperature dependency
-    ns.ρs = 2400                # [kg/m^3]       # aquifer.rhos
-    ns.λf = 0.663               # [W/mk]         # aquifer.labdaf
-    ns.λs = 4.2                 # [W/mk]         # aquifer.labdas
-    ns.g = 9.81                 # [m/s^2]        # aquifer.g            # ns.ge_i = '<0,-g, 0>_i'
     ns.H = H                    # [m]
     ns.rw = rw                  # [m]
     ns.rmax = rmax              # [m]
-    ns.φ = φ                    # [-]            # aquifer.φ
-    ns.Jw = ns.Q / ns.H        # [m^2/s]
-    ns.mu = mu
+    ns.φ = φ                    # [-]
     ns.ct = 1/ctinv
-    # ns.ctφ = 1e-9               # [1/Pa]
-    # ns.ctf = 5e-10              # [1/Pa]
+    # ns.ctφ = 1e-9             # [1/Pa]
+    # ns.ctf = 5e-10            # [1/Pa]
+    ns.Jw = ns.Q / ns.H         # [m^2/s]
+    ns.mu = aquifer.mu
+    ns.cf = aquifer.cpf         # [J/kg K]
+    ns.cs = aquifer.cps         # [J/kg K]
+    ns.ρf = aquifer.rhof        # [kg/m^3]
+    ns.ρs = aquifer.rhos        # [kg/m^3]
+    ns.λf = aquifer.labdaf      # [W/mk]
+    ns.λs = aquifer.labdas      # [W/mk]
+    ns.g = aquifer.g            # [m/s^2]             # ns.ge_i = '<0,-g, 0>_i'
     ns.k = k_int
     ns.uw = 'Q / Aw'
     ns.K = k_int / mu
     # ns.K = np.diag(k_int) / (ns.mu)  # [m/s] *[1/rho g]
     # ns.q_i = '-K_ij (p_,j - ρf ge_i,j)' #[s * Pa* 1/m] = [Pa*s/m] ρf g x_1,j
     # ns.u_i = 'q_i / φ '         # [m/s]
-    ns.T0 = 88.33+273           # [K]
+    ns.T0 = aquifer.Tref       # [K] #88.33+273
 
     # total system (rock + fluid) variable
     ns.ρ = ns.φ * ns.ρf + (1 - ns.φ) * ns.ρs
     ns.cp = ns.φ * ns.cf + (1 - ns.φ) * ns.cs
     ns.λ = ns.φ * ns.λf + (1 - ns.φ) * ns.λs
-
 
     ###########################
     # Solve by implicit euler #
@@ -137,6 +137,7 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     # # ns.cf = 4187.6 * (-922.47 + 2839.5 * (ns.T / ns.Tatm) - 1800.7 * (ns.T / ns.Tatm)**2 + 525.77*(ns.T / ns.Tatm)**3 - 73.44*(ns.T / ns.Tatm)**4)
     # # ns.cf = 3.3774 - 1.12665e-2 * ns.T + 1.34687e-5 * ns.T**2 # if temperature above T=100 [K]
     # # ns.mu = PropsSI('V', 'T', ns.T.eval(), 'P', ns.p.eval(), 'IF97::Water') # note to self: temperature dependency
+    # ns.ρf = PropsSI('D', 'T', ns.T.eval(), 'P', ns.p.eval(), 'IF97::Water') # note to self: temperature dependency
     #
     # # define initial state
     # sqr = topo.integral('(p - p0)^2' @ ns, degree=degree*2)
@@ -199,17 +200,6 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     # # ns.sd = (ns.x[0]) ** 2
     # # refined_topo = RefineBySDF(plottopo, ns.rw, geom[0], nref)
     #
-    #
-    # construct empty arrays
-    parraywell = np.empty([2*N+1])
-    parrayexact = np.empty(2*N+1)
-    Tarraywell = np.empty(2*N+1)
-    Tarrayexact = np.empty(2*N+1)
-    Qarray = np.empty(2*N+1)
-    dparraywell = np.empty([2*N+1])
-    parrayexp = np.empty(2*N+1)
-    Tarrayexp = np.empty(2*N+1)
-    #
     # plottopo = topo[:, :, 0:].boundary['back']
     # # mesh
     # bezier = plottopo.sample('bezier', 2)
@@ -224,6 +214,16 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
     # bezier = plottopo.sample('bezier', 9)
     # solve for steady state state of pressure
     # lhsp = solver.solve_linear('lhsp', resp, constrain=consp)
+
+    # construct empty arrays
+    parraywell = np.empty([2*N+1])
+    parrayexact = np.empty(2*N+1)
+    Tarraywell = np.empty(2*N+1)
+    Tarrayexact = np.empty(2*N+1)
+    Qarray = np.empty(2*N+1)
+    dparraywell = np.empty([2*N+1])
+    parrayexp = np.empty(2*N+1)
+    Tarrayexp = np.empty(2*N+1)
 
     ##############################
     # Linear system of equations #
@@ -244,20 +244,21 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             ns.k  = k_int
             ns.mu = mu
             ns.q_i  = '-(  k  / mu ) p_,i'
-            # ns.qh_i = '-λ T_,i'
-            ns.hmin = (rverts[1]-rverts[0])
-            strength = 0.9                                          # set strength
-            ns.ε = strength * ns.hmin * ns.ρf * ns.cf               # calculate artificial diffusion
-            ns.qh_i = '-(λ + ε) T_,i'                             # set in weak formulation
             ns.v    = 'Q / Aw'
             ns.pref = 225e5     # [Pa]
             ns.Tref = 90 + 273  # [K]
             ns.Twell = 88 + 273  # [K]
-
             ns.epsilonjt = 2e-7
             ns.constantjt = ns.epsilonjt
             ns.cpratio = (ns.ρf * ns.cf) / (ns.ρ * ns.cp)
             ns.phieff = 0 #ns.φ * ns.cpratio * (ns.epsilonjt + 1/(ns.ρf * ns.cf))
+
+            # add artificial diffusion
+            ns.hmin = (rverts[1]-rverts[0])
+            strength = 0                                            # set strength
+            ns.ε = strength * ns.hmin * ns.ρf * ns.cf               # calculate artificial diffusion
+            ns.qh_i = '-(λ + ε) T_,i'                               # set in weak formulation
+            print("hmin", ns.hmin.eval(), "c", (ns.ρf * ns.cf).eval(), "diffusion", ns.λ.eval(), 'artificial diffusion', ns.ε.eval() )
 
             psqr = topo.boundary['outer'].integral('( (p - pref)^2 ) d:x' @ ns, degree=2)  # farfield pressure
             pcons = solver.optimize('plhs', psqr, droptol=1e-15)
@@ -285,8 +286,8 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
             pres = -topo.integral('pbasis_n,i q_i d:x' @ ns, degree=6)  # convection term darcy
             pres -= topo.boundary['strata, inner'].integral('(pbasis_n q_i n_i) d:x' @ ns, degree=degree * 3)
 
-            Tres = topo.integral('(Tbasis_n ρf cf q_i T_,i) d:x' @ ns, degree=degree * 2) # convection term ( totaal moet - zijn)
-            Tres += topo.integral('(Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2) # conduction term ( totaal moet - zijn)
+            Tres = topo.integral('(Tbasis_n ρf cf q_i T_,i) d:x' @ ns, degree=degree * 2)             # convection term ( totaal moet - zijn)
+            Tres += topo.integral('(Tbasis_n,i qh_i) d:x' @ ns, degree=degree * 2)                    # conduction term ( totaal moet - zijn)
             Tres -= topo.integral('(Tbasis_n epsilonjt ρf cf q_i p_,i) d:x' @ ns, degree=degree * 2)  # J-T effect ( totaal moet + zijn)
 
             if istep > 0:
@@ -300,10 +301,10 @@ def main(degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit[
 
             if istep > N:
                 pres -= topo.boundary['inner'].integral('pbasis_n v d:x' @ ns, degree=6)  # mass conservation well
-                Tres -= topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2) # neumann bc
+                Tres -= topo.boundary['inner'].integral('(Tbasis_n ρf cf v n_i T_,i) d:x' @ ns, degree=degree * 2) # remove neumann bc
 
                 Tsqr += topo.boundary['inner'].integral('( (T - Td)^2 ) d:x' @ ns, degree=2)
-                Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15)
+                Tcons = solver.optimize('Tlhs', Tsqr, droptol=1e-15) # add dirichlet bc
 
             plhs = solver.solve_linear('plhs', pres, constrain=pcons, arguments={'plhs0': plhs0})
             Tlhs = solver.solve_linear('Tlhs', Tres, constrain=Tcons, arguments={'plhs': plhs, 'Tlhs0': Tlhs0})

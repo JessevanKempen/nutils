@@ -9,12 +9,14 @@ import pandas as pd
 # import seaborn as sns
 import matplotlib.pyplot as plt
 import math
-from files.myUQlibrary import *
+from files.myUQlib import *
+from files.myFUQlib import *
 from files.myModel import *
 
 #################### Forward Uncertainty Quantification #########################
 
 def generateRVSfromPDF(size):
+    # Uniforme verdeling nodig bij gebruik van sensitiviteitsanalyse
     Hpdf = H = np.random.uniform(low=90, high=110, size=size)
     φpdf = φ = get_samples_porosity(size)  # joined distribution
     Kpdf = K = get_samples_permeability(φpdf, size)  # joined distribution
@@ -63,7 +65,7 @@ def performFEA(params, aquifer, size, timestep, t1endtime):
 
     # Run forward model with finite element method
     for index in range(size):
-        pmatrixwell[index, :], Tmatrixwell[index, :] = main(degree=2, btype="spline", elems=elems, rw=rw, rmax=rmax, H=Hpdf[index], mu=mu,
+        pmatrixwell[index, :], Tmatrixwell[index, :] = main(aquifer=aquifer, degree=2, btype="spline", elems=elems, rw=rw, rmax=rmax, H=Hpdf[index], mu=mu,
                              φ=φpdf[index], ctinv=ctinvpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=timestep,
                              t1endtime=t1endtime)
 

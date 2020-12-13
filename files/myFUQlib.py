@@ -9,7 +9,7 @@ import pandas as pd
 # import seaborn as sns
 import matplotlib.pyplot as plt
 import math
-from files.myUQlibrary import *
+from files.myUQlib import *
 from files.myModel import *
 
 #################### Doublet model library #########################
@@ -49,7 +49,6 @@ class Aquifer:
         self.patm = aquifer['patm']          # atmospheric pressure
         self.ε = aquifer['ε']                # tubing roughness [m]
         self.ct = aquifer['ct']
-        self.cs = aquifer['cs']
 
 # class Well:
 #
