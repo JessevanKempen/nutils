@@ -103,28 +103,30 @@ def listOfTuples(l1, l2):
 import plotly.figure_factory as ff
 import plotly.express as px
 
-#################### Uncertainty Quantification #########################
-# N=500
+################### Uncertainty Quantification #########################
+# N=2000
 # porosity = get_samples_porosity(N)
 # permeability = get_samples_permeability(porosity, N)
 #
 # df = pd.DataFrame(listOfTuples(permeability, porosity), columns=["Permeability", "Porosity"])
 #
 # f, ax = plt.subplots(figsize=(6, 6))
-# sns.kdeplot(df.Permeability, df.Porosity, n_levels=10, ax=ax)
-# sns.rugplot(df.Permeability, color="g", ax=ax)
-# sns.rugplot(df.Porosity, vertical=True, ax=ax)
-# ax.set(xscale="log", xlabel='K [m^2]', ylabel='φ [-]')
-
-
-# fig = px.histogram(df, x="Permeability", y="Porosity",
-#                    marginal="box",  # or violin, rug
-#                    hover_data=df.columns)
-# fig.show()
-
-
-# sns.jointplot(x="Permeability", y="Porosity", ax=ax, data=df, kind="kde", n_levels=10);
-
+# # sns.kdeplot(df.Permeability, df.Porosity, n_levels=10, ax=ax)
+# # sns.rugplot(df.Permeability, color="g", ax=ax)
+# # sns.rugplot(df.Porosity, vertical=True, ax=ax)
+#
+# # distributionHeight = stats.lognorm(scale=70, s=0.25)
+# # Height = distributionHeight.rvs(size=N)
+# # ax.hist(Height, density=True, histtype='stepfilled', alpha=0.2, bins=20)
+#
+# # sns.jointplot(data=df, x="Permeability", y="Porosity", ax=ax, hue="species", kind="kde", n_levels=10);
+# # ax.set(xlabel='K [m^2]', ylabel='φ [-]')
+#
+# # fig = px.histogram(df, x="Permeability", y="Porosity",
+# #                    marginal="box",  # or violin, rug
+# #                    hover_data=df.columns)
+#
+# plt.show()
 # # plot waaier
 # sns.lineplot(
 #     data=fmri, x="timepoint", y="signal", hue="event", err_style="bars", ci=95

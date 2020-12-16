@@ -5,7 +5,7 @@ from pymc3.distributions import Interpolated
 
 def get_samples_porosity(size):
     # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
-    distributionPorosity = stats.lognorm(scale=0.2, s=0.5)
+    distributionPorosity = stats.lognorm(scale=0.2, s=0.25)
     samplesPorosity = distributionPorosity.rvs(size=size)
 
     return samplesPorosity
@@ -20,7 +20,7 @@ def get_samples_permeability(porosity, size):
     permeability = constant * tau**2 * ( porosity** tothepower / SSA ** 2 )
     mu_per = np.mean(permeability)
     stddv_per = np.var(permeability) ** 0.5
-    permeability_dis = stats.lognorm(scale=mu_per, s=0.5)
+    permeability_dis = stats.lognorm(scale=mu_per, s=0.25)
     samplesPermeability = permeability_dis.rvs(size=size)
 
     return samplesPermeability

@@ -26,13 +26,13 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 200
+N = 2
 
 # Define time of simulation
 timestep = 60
 endtime = 3600
 t1steps = round(endtime / timestep)
-tperiod = 2*t1steps+1
+Nt = 2*t1steps+1
 
 # Forward/Bayesian Inference calculation
 performInference = True
@@ -106,31 +106,7 @@ else:
     # Amount of chains
     chains = 4
 
-    # True data
-    permeability_true = 1e-12 #2.2730989084434785e-08
-    porosity_true = 0.163
-    height_true = 70
-    compressibility_true = 1e-10
-    flowrate_true = 0.07
-
-
-    # Observed data
-    T_data = stats.norm(loc=89.94, scale=0.05).rvs(size=N)
-    # p_data = stats.norm(loc=225e5, scale=0.05).rvs(size=N) # observed data change in pressure over time
-    p_data = stats.norm(loc=225e5, scale=0.25).rvs(size=N)
-
     # Library functions
-    def get_dp_drawdown(R, K, φ, H, ct, Q, t1):
-        # Initialize parameters
-        Jw = Q / H
-        eta = K / (φ * ct)
-
-        # Compute drawdown gradient pressure
-        ei = sc.expi(-R ** 2 / (4 * eta * t1))
-        dp = (2 * Jw * ei / (4 * math.pi * K * R))
-
-        return dp, sd_p
-
     def get_𝜇_K(porosity, size):
         constant = np.random.uniform(low=10, high=100, size=size)  # np.random.uniform(low=3.5, high=5.8, size=size)
         tau = np.random.uniform(low=0.3, high=0.5, size=size)
@@ -148,92 +124,86 @@ else:
         # Kpdf = pm.Lognormal('K', mu=math.log(np.mean(K_samples)), sd=1) #joined distribution
         return 𝜇_K
 
-    def from_posterior(param, samples, k=100):
-        smin, smax = np.min(samples), np.max(samples)
-        width = smax - smin
-        x = np.linspace(smin, smax, k)
-        y = stats.gaussian_kde(samples)(x)
-        # print("x", x)
-        # print("y", y)
-        # print("samples", samples)
-        # print("param", param)
-        # what was never sampled should have a small probability but not 0,
-        # so we'll extend the domain and use linear approximation of density on it
-        x = np.concatenate([[x[0] - 3 * width], x, [x[-1] + 3 * width]])
-        y = np.concatenate([[0], y, [0]])
-        return Interpolated(param, x, y)
+    ###########################
+    #     Synthetic data      #
+    ###########################
 
-    # Mean of variables
-    𝜇_H = aquifer.H                      # lower_H = 35, upper_H = 105 (COV = 50%)
-    𝜇_φ = aquifer.φ                      # lower_φ = 0.1, upper_φ = 0.3 (COV = 50%)
-    𝜇_ct = aquifer.ct                    # lower_ct = 0.5e-10, upper_ct = 1.5e-10 (COV = 50%)
-    𝜇_Q = aquifer.Q                      # lower_Q = 0.35, upper_Q = 0.105 (COV = 50%)
-    𝜇_cs = aquifer.cps                   # lower_cs = 1325 upper_cs = 3975 (COV = 50%)
+    with pm.Model() as SyntheticModel:
 
-    # Standard deviation of variables
-    sd_H = 0.25
-    sd_φ = 0.25
-    sd_K = 0.25
-    sd_ct = 0.25
-    sd_Q = 0.25
-    sd_cs = 0.25
-    sd_p = 0.25
+        # True data (what actually drives the true pressure)
+        K_true = 1e-12  # 2.2730989084434785e-08
+        φ_true = 0.163
+        H_true = 70
+        ct_true = 1e-10
+        Q_true = 0.07
+        cs_true = 2650
+
+        # Lognormal priors for true parameters
+        Hpdf = pm.Lognormal('H', mu=np.log(H_true), sd=0.01)
+        φpdf = pm.Lognormal('φ', mu=np.log(φ_true), sd=0.01)
+        Kpdf = pm.Lognormal('K', mu=np.log(K_true), sd=0.01)
+        ctpdf = pm.Lognormal('ct', mu=np.log(ct_true), sd=0.01)
+        Qpdf = pm.Lognormal('Q', mu=np.log(Q_true), sd=0.01)
+        cspdf = pm.Lognormal('cs', mu=np.log(cs_true), sd=0.01)
+        parametersRVS = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt),
+                         Qpdf.random(size=Nt), cspdf.random(size=Nt)]
+
+        # parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
+        solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
+        p_true = np.mean(solAA[0].T, axis=1)
+        print(p_true)
+
+        # Z_t observed data
+        np.random.seed(716742)  # set random seed, so the data is reproducible each time
+        σnoise = 0.1
+        sd_p = σnoise * np.var(p_true) ** 0.5
+        z_t = p_true + np.random.randn(Nt) * sd_p
 
     with pm.Model() as PriorModel:
+        ###########################
+        #    Prior information    #
+        ###########################
 
-        # Priors for unknown model parameters
+        # Mean of expert variables (the specific informative prior)
+        𝜇_H = aquifer.H                      # lower_H = 35, upper_H = 105 (COV = 50%)
+        𝜇_φ = aquifer.φ                      # lower_φ = 0.1, upper_φ = 0.3 (COV = 50%)
+        𝜇_ct = aquifer.ct                    # lower_ct = 0.5e-10, upper_ct = 1.5e-10 (COV = 50%)
+        𝜇_Q = aquifer.Q                      # lower_Q = 0.35, upper_Q = 0.105 (COV = 50%)
+        𝜇_cs = aquifer.cps                   # lower_cs = 1325 upper_cs = 3975 (COV = 50%)
+
+        # Standard deviation of variables (CV=50%)
+        sd_H = 0.3
+        sd_φ = 0.3
+        sd_K = 0.3
+        sd_ct = 0.3
+        sd_Q = 0.3
+        sd_cs = 0.001
+
+        # Lognormal priors for unknown model parameters
         Hpdf = pm.Lognormal('H', mu=np.log(𝜇_H), sd=sd_H)
         φpdf = pm.Lognormal('φ', mu=np.log(𝜇_φ), sd=sd_φ)
         Kpdf = pm.Lognormal('K', mu=np.log(get_𝜇_K(φpdf, N)), sd=sd_K)
         ctpdf = pm.Lognormal('ct', mu=np.log(𝜇_ct), sd=sd_ct)
         Qpdf = pm.Lognormal('Q', mu=np.log(𝜇_Q), sd=sd_Q)
         cspdf = pm.Lognormal('cs', mu=np.log(𝜇_cs), sd=sd_cs)
-        parametersRVS = [Hpdf.random(size=N), φpdf.random(size=N), Kpdf.random(size=N), ctpdf.random(size=N), Qpdf.random(size=N), cspdf.random(size=N)]
-        print(parametersRVS)
+        # Uniform priors for unknown model parameters
+        # Hpdf = pm.Uniform('H', lower=35, upper=105)
+        # φpdf = pm.Lognormal('φ', mu=np.log(𝜇_φ), sd=sd_φ)
+        #φpdf = pm.Uniform('φ', lower=0.1, upper=0.3)
+        # Kpdf = pm.Lognormal('K', mu=np.log(get_𝜇_K(φpdf, N)), sd=sd_K)
+        # ctpdf = pm.Uniform('ct', lower=0.5e-10, upper=1.5e-10)
+        # Qpdf = pm.Uniform('Q', lower=0.035, upper=0.105)
+        # cspdf = pm.Uniform('cs', lower=1325, upper=3975)
+        parametersRVS = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt), Qpdf.random(size=Nt), cspdf.random(size=Nt)]
 
-        # permeability = pm.Lognormal('permeability', mu=math.log(9e-9), sd=0.025)
-        #
-        # porosity_samples = ((permeability.random(size=N) * S0_sand ** 2) / (constant)) ** (1 / tothepower)
-        # mu_por = np.mean(porosity_samples)
-        # stddv_por = np.var(porosity_samples) ** 0.5
-        # porosity = pm.Normal('porosity', mu=mu_por, sd=0.025)       #porosity 0 - 0.3 als primary data, permeability als secundary data
-
-        # Priors for unknown model parameters based on porosity first as joined distribution
-        # porosity = pm.Uniform('porosity', lower=0.1, upper=0.5)
-        # porosity = pm.Lognormal('porosity', mu=math.log(0.3), sd=0.24)       #porosity 0 - 0.3 als primary data, permeability als secundary data
-
-        # porosity_samples = porosity.random(size=N)
-        # permeability_samples = constant * ( porosity_samples** tothepower / S0_sand ** 2 )
-        # mu_per = np.mean(permeability_samples)
-        # permeability = pm.Lognormal('permeability', mu=math.log(mu_per), sd=1)
-
-        # stddv_per = np.var(permeability_samples) ** 0.5
-        # print("permeability mean", m?u_per, "permeability standard deviation", stddv_per)
-
-
-
-        # Expected value of outcome (problem is that i can not pass a pdf to my external model function, now i pass N random values to the function, which return N random values back, needs to be a pdf again)
-        # print("\r\nRunning FE model...", permeability_samples, 'por', porosity_samples)
-
-        # p_model = np.empty([N])
-        # T_model = np.empty([N])
-
-        #Hier moeten meerdere variable.random(size=N) in de for loop. Hoe?
-        #Uit alle verdelingen boven een array vormen met waardes, en dan hier in stoppen
-
-        # Run Analytical Analysis (Backward)
         # Run Analytical Analysis (Backward)
         print("\r\nRunning Analytical Analysis... (Prior, pymc3)")
-        solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)     #pressure = pdf1 * variable1 + pdf2 *variable2 etc.
-        p_t = solAA[0][:, t1steps].T #draw multiple samples 1 point in time
-        # p_t = solAA[0][0, :].T         #draw single sample multiple points in time
-        p = solAA[0]
-
-        # Z_t noisy observation
-        z_t = p_t + np.random.randn(N) * 1e4
+        solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
+        p_t = np.mean(solAA[0].T, axis=1)     # draw single sample multiple points in time
+        print(p_t)
 
         # Likelihood (sampling distribution) of observations
-        z_h = pm.Normal('z_h', mu=p_t, sd=1, observed=z_t)
+        z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=σnoise, observed=np.log(z_t))
 
         # plot transient test
         plt.figure(figsize=(10, 3))
@@ -246,32 +216,37 @@ else:
         # with open('pprior.npy', 'wb') as pprior:
         #     np.save(pprior, p)
         # show_seaborn_plot('pprior.npy', "pwell")
-        plt.show()
+        # plt.show()
 
-        # mu_p = np.mean(pdrawdown)
-        # p = pm.Normal('p', mu=mu_p, sd=10)
-        # sd = pm.Exponential("sd", 1.0)
-        # stddv_p = np.var(pdrawdown) ** 0.5
+        # mu_p = np.mean(p_t)
+        # sd_p = np.var(p_t) ** 0.5
+        # p = pm.Lognormal('p', mu=np.log(mu_p), sd=sd_p)
 
         # # Likelihood (predicted distribution) of observations
-        # y = pm.Normal('y', mu=p, sd=1e4, observed=z_t) #p_data = histogram t1
+        # y = pm.Normal('y', mu=p, sd=1e4, observed=z_t)
 
     with PriorModel:
         # Inference
         start = pm.find_MAP()                      # Find starting value by optimization
-        step = pm.NUTS(scaling=start)              # Instantiate MCMC sampling algoritm         #pm.Metropolis()   pm.GaussianRandomWalk()
+        step = pm.NUTS(scaling=start)     # Instantiate MCMC sampling algoritm #HamiltonianMC
 
-        trace = pm.sample(N, start=start, step=step, cores=1, chains=chains) # Draw N posterior samples
-        # print("length posterior", len(trace['permeability']), trace.get_values('permeability', combine=True), len(trace.get_values('permeability', combine=True)))
+        trace = pm.sample(10000, start=start, step=step, cores=1, chains=chains)
 
     print(az.summary(trace, round_to=2))
 
     # chain_count = trace.get_values('K').shape[0]
-    # T_pred = pm.sample_posterior_predictive(trace, samples=chain_count, model=m0)
+    # T_pred = pm.sample_posterior_predictive(trace, samples=chain_count, model=PriorModel)
     data_spp = az.from_pymc3(trace=trace)
-    joint_plt = az.plot_joint(data_spp, var_names=['K', 'φ'], kind='kde', fill_last=False);
-    trace_fig = az.plot_trace(trace, var_names=[ 'H', 'φ', 'K', 'ct', 'Q', 'cs'], figsize=(12, 8));
-    trace_H = az.plot_posterior(data_spp, var_names=['H'], kind='hist')
+    # joint_plt = az.plot_joint(data_spp, var_names=['K', 'φ'], kind='kde', fill_last=False);
+    # trace_fig = az.plot_trace(trace, var_names=[ 'H', 'φ', 'K', 'ct', 'Q', 'cs'], figsize=(12, 8));
+
+    az.plot_trace(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], compact=True);
+
+    # fig, axes = az.plot_forest(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], combined=True)    #94% confidence interval with only lines (must normalize the means!)
+    # axes[0].grid();
+
+    # trace_H = az.plot_posterior(data_spp, var_names=['φ'], kind='hist')
+    # trace_p = az.plot_posterior(data_spp, var_names=['p'], kind='hist')
     pm.traceplot(trace)
 
     plt.show()
@@ -279,9 +254,6 @@ else:
     traces = [trace]
 
     for _ in range(2):
-
-        # Z_t more noisy observations
-        z_t = p_t + np.random.randn(N) * 1e4
 
         with pm.Model() as InferenceModel:
             # Priors are posteriors from previous iteration
@@ -292,27 +264,21 @@ else:
             Q = from_posterior('Q', trace['Q'])
             cs = from_posterior('cs', trace['cs'])
 
-            parametersRVS = [H.random(size=N), φ.random(size=N), K.random(size=N), ct.random(size=N), Q.random(size=N), cs.random(size=N)]
+            parametersRVS = [H.random(size=Nt), φ.random(size=Nt), K.random(size=Nt), ct.random(size=Nt), Q.random(size=Nt), cs.random(size=Nt)]
 
             # Run Analytical Analysis (Backward)
             print("\r\nRunning Analytical Analysis... (Backward, pymc3)")
             solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
-            p_t = solAA[0][:, t1steps].T  # draw multiple samples 1 point in time
-            # p_t = solAA[0][0, :].T
-            p = solAA[0]
-
-            # "hidden states" following a SDE distribution
-            # parametrized by time step (det. variable) and uninformative priors
-            # ph = EulerMaruyama('ph', timestep, get_dp_drawdown, (aquifer.rw, Kh, φh, Hh, cth, Qh), shape=tperiod, testval=p_t)
-
-            # Likelihood (predicted distribution) of observations
-            # zh = pm.Normal('zh', mu=ph, sd=1e4, observed=z_t)
+            p_t = np.mean(solAA[0].T, axis=1)  # draw single sample multiple points in time
 
             # Likelihood (sampling distribution) of observations
-            z_h = pm.Normal('z_h', mu=p_t, sd=1, observed=z_t)
+            z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=sd_p, observed=np.log(z_t))
 
-            # draw 1000 posterior samples
-            trace = pm.sample(1000, cores=1, chains=chains)
+            # Inference
+            start = pm.find_MAP()
+            step = pm.NUTS(scaling=start)
+
+            trace = pm.sample(10000, start=start, step=step, cores=1, chains=chains)
             traces.append(trace)
 
             # plt.figure(figsize=(10, 3))
@@ -352,7 +318,7 @@ else:
             x = np.linspace(smin, smax, 100)
             y = stats.gaussian_kde(samples)(x)
             plt.plot(x, y, color=cmap(1 - update_i / len(traces)))
-        plt.axvline({'K': permeability_true, 'φ': porosity_true, 'H': height_true, 'ct': compressibility_true, 'Q': flowrate_true}[param], c='k')
+        plt.axvline({'K': K_true, 'φ': φ_true, 'H': H_true, 'ct': ct_true, 'Q': Q_true}[param], c='k')
         plt.ylabel('Frequency')
         plt.title(param)
 
@@ -375,10 +341,6 @@ with open('pprior.npy', 'wb') as pprior:
 
 show_seaborn_plot('pprior.npy', "p9")
 plt.show()
-
-# Sobal 1st order sensitivity index with 10 parameters
-# for i in length(parameter):
-#     S(i) =  np.var(parameter(i)) / np.var(T_model)
 
 # with open('pmatrix.npy', 'rb') as f:
 #     a = np.load(f)
