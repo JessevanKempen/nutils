@@ -1,67 +1,34 @@
-#################### Uncertainty Quantification Library #########################
-from scipy import stats
-import numpy as np, treelog
-from pymc3.distributions import Interpolated
+import numpy as np
+import pymc3 as pm
+import theano
 import theano.tensor as tt
 
-from files.myMain import aquifer
-from files.myMain import N
-from files.myModel import *
+# for reproducibility here's some version info for modules used in this notebook
+import platform
+import IPython
+import matplotlib
+import matplotlib.pyplot as plt
+import emcee
+import corner
+import math
+import os
+from autograd import grad
+print("Python version:     {}".format(platform.python_version()))
+print("IPython version:    {}".format(IPython.__version__))
+print("Numpy version:      {}".format(np.__version__))
+print("Theano version:     {}".format(theano.__version__))
+print("PyMC3 version:      {}".format(pm.__version__))
+print("Matplotlib version: {}".format(matplotlib.__version__))
+print("emcee version:      {}".format(emcee.__version__))
+print("corner version:     {}".format(corner.__version__))
 
-def get_samples_porosity(size):
-    # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
-    distributionPorosity = stats.lognorm(scale=0.2, s=0.25)
-    samplesPorosity = distributionPorosity.rvs(size=size)
+import numpy as np
+import pymc3 as pm
+import arviz as az
 
-    return samplesPorosity
+import warnings
 
-def get_samples_permeability(porosity, size):
-    constant = np.random.uniform(low=10, high=100, size=size) #np.random.uniform(low=3.5, high=5.8, size=size)
-    tau = np.random.uniform(low=0.3, high=0.5, size=size)
-    tothepower = np.random.uniform(low=3, high=5, size=size)
-    rc = np.random.uniform(low=10e-6, high=30e-6, size=size)
-    SSA = 3/rc  #4 pi R**2 / (4/3) pi R**3
 
-    permeability = constant * tau**2 * ( porosity** tothepower / SSA ** 2 )
-    mu_per = np.mean(permeability)
-    stddv_per = np.var(permeability) ** 0.5
-    permeability_dis = stats.lognorm(scale=mu_per, s=0.25)
-    samplesPermeability = permeability_dis.rvs(size=size)
-
-    return samplesPermeability
-
-def plot_samples_porosity(distributionPorosity):
-    x1 = np.linspace(0, 1, 200)
-    ax[0].plot(x1, distributionPorosity.pdf(x1) * (max(x1) - min(x1)))
-    ax[0].set(xlabel='Porosity [-]', ylabel='Probability')
-    # ax[0].set_xscale('log')
-    plt.show()
-
-def plot_samples_permeability(distributionPermeability):
-    x2 = np.linspace(0, max(samplesPermeability), 200)
-    bin_centers1 = 0.5*(x2[1:] + x2[:-1])
-    ax[1].set(xlabel='Permeability K [m/s]', ylabel='Probability')
-    ax[1].plot(x2, permeability_dis.pdf(x2)*(max(x2)-min(x2)))
-    # ax[0].set_xscale('log')
-    # ax[1].set_xscale('log')
-    plt.show()
-
-def from_posterior(param, samples, k=100):
-    smin, smax = np.min(samples), np.max(samples)
-    width = smax - smin
-    x = np.linspace(smin, smax, k)
-    y = stats.gaussian_kde(samples)(x)
-    # print("x", x)
-    # print("y", y)
-    # print("samples", samples)
-    # print("param", param)
-    # what was never sampled should have a small probability but not 0,
-    # so we'll extend the domain and use linear approximation of density on it
-    x = np.concatenate([[x[0] - 3 * width], x, [x[-1] + 3 * width]])
-    y = np.concatenate([[0], y, [0]])
-    return Interpolated(param, x, y)
-
-# compute gradients using central difference
 def gradients(vals, func, releps=1e-3, abseps=None, mineps=1e-9, reltol=1e-3,
               epsscale=0.5):
     """
@@ -227,7 +194,6 @@ class LogLikeWithGrad(tt.Op):
         # the method that calculates the gradients - it actually returns the
         # vector-Jacobian product - g[0] is a vector of parameter values
         theta, = inputs  # our parameters
-
         return [g[0] * self.logpgrad(theta)]
 
 class LogLikeGrad(tt.Op):
@@ -274,32 +240,9 @@ class LogLikeGrad(tt.Op):
             return self.likelihood(values, self.x, self.data, self.sigma)
 
         # calculate gradients
-        # print('theta', theta, 'lnlike', lnlike)
         grads = gradients(theta, lnlike)
 
-        try:
-            outputs[0][0] = grads
-            # print("Theta to grads")
-        except:
-            print("Theta is infinity")
-            outputs[0][0] = float('NaN')
-
-# define your really-complicated likelihood function that uses loads of external codes
-def my_loglike(theta, x, data, sigma):
-    """
-    A Gaussian log-likelihood function for a model with parameters given in theta
-    """
-
-    model = my_model(theta, x)
-
-    return -0.5*len(x)*np.log(2*math.pi*sigma**2) - (0.5/sigma**2) * np.sum((data-model)**2)
-
-def my_model_random(point=None, size=None):
-    """
-    Draw posterior predictive samples from model.
-    """
-    return my_model((point["H"], point["φ"], point["K"], point["ct"], point["Q"], point["cs"]), x)
-    # return my_model((point["m"], point["c"]), x)
+        outputs[0][0] = grads
 
 # define your super-complicated model that uses load of external codes
 def my_model(theta, x):
@@ -314,120 +257,185 @@ def my_model(theta, x):
 
         but I've made it more complicated for demonstration purposes
     """
-    solAA = performAA(theta, x)
-    # print('output my_model', np.mean(solAA[0].T, axis=1))
+    m, c = theta  # unpack line gradient and y-intercept
+    return m * x + c
 
-    return np.mean(solAA[0].T, axis=1)  # draw single sample multiple points in time
+# define your really-complicated likelihood function that uses loads of external codes
+def my_loglike(theta, x, data, sigma):
+    """
+    A Gaussian log-likelihood function for a model with parameters given in theta
+    """
+    model = my_model(theta, x)
 
-def generateRVSfromPDF(size):
-    # Uniforme verdeling nodig bij gebruik van sensitiviteitsanalyse
-    Hpdf = H = np.random.uniform(low=90, high=110, size=size)
-    φpdf = φ = get_samples_porosity(size)  # joined distribution
-    Kpdf = K = get_samples_permeability(φpdf, size)  # joined distribution
-    ctpdf = ct = np.random.uniform(low=1e-11, high=1e-9, size=size)
-    Qpdf = Q = np.random.uniform(low=0.1, high=1.0, size=size)
-    cspdf = cs = np.random.uniform(low=2400, high=2900, size=size)
+    return -0.5*len(x)*np.log(2*math.pi*sigma**2) - (0.5/sigma**2) * np.sum((data-model)**2)
 
-    parametersRVS = [Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf]
-
-    return parametersRVS
-
-def performFEA(params, aquifer, size, timestep, t1endtime):
-    """ Computes pressure and temperature at wellbore by finite element analysis
-
-    Arguments:
-    params(array):      model parameters
-    size (float):       sample size
-    timestep (float):   step size
-    endtime (float):    size of each period
-    Returns:
-    P (matrix):         value of pressure 2N x endtime
-    T (matrix):         value of temperature 2N x endtime
+def my_model_random(point=None, size=None):
+    """
+    Draw posterior predictive samples from model.
     """
 
-    # Initialize parameters
-    Hpdf = params[0]
-    φpdf = params[1]
-    Kpdf = params[2]
-    ctinvpdf = 1/params[3]
-    Qpdf = params[4]
-    cspdf = params[5]
+    return my_model((point["m"], point["c"]), x)
 
-    # Calculate total number of time steps
-    t1 = round(t1endtime / timestep)
-    timeperiod = timestep * np.linspace(0, 2*t1, 2*t1+1)
+###########################
+#     Synthetic data      #
+###########################
 
-    # Initialize boundary conditions
-    rw = aquifer.rw #0.1
-    rmax = aquifer.rmax #1000
-    mu = aquifer.mu #0.31e-3
-    elems = 25
+# Set up our data
+N = 10      # number of data points
+sigma = 1.  # standard deviation of noise
+x = np.linspace(0., 9., N)
 
-    # Construct empty containers
-    pmatrixwell = np.zeros([size, 2*t1+1])
-    Tmatrixwell = np.zeros([size, 2*t1+1])
+mtrue = 0.4  # true gradient
+ctrue = 3.   # true y-intercept
 
-    # Run forward model with finite element method
-    for index in range(size):
-        pmatrixwell[index, :], Tmatrixwell[index, :] = main(aquifer=aquifer, degree=2, btype="spline", elems=elems, rw=rw, rmax=rmax, H=Hpdf[index], mu=mu,
-                             φ=φpdf[index], ctinv=ctinvpdf[index], k_int=Kpdf[index], Q=Qpdf[index], timestep=timestep,
-                             t1endtime=t1endtime)
+truemodel = my_model([mtrue, ctrue], x)
 
-        # save array after each timestep for each run, export matrix from main()
-        # save seperate runs in csv file, use mean from each timestep, plot 95% CI with seaborn
-        # with open('pmatrix.npy', 'wb') as f:
-        #     np.save(f, pmatrixwell)
+# Make data
+data = sigma * np.random.randn(N) + truemodel
 
-        # np.savetxt('data.csv', (col1_array, col2_array, col3_array), delimiter=',')
+ndraws = 2000  # number of draws from the distribution
+nburn = 1000  # number of "burn-in points" (which we'll discard)
+chains = 4
 
-    return pmatrixwell, Tmatrixwell
+# Create our Op
+logl = LogLikeWithGrad(my_loglike, data, x, sigma)
 
-def performAA(params, x):
-    """ Computes pressure and temperature at wellbore by analytical analysis
+# use PyMC3 to sampler from log-likelihood
+with pm.Model() as opmodel:
+    # uniform priors on m and c
+    m = pm.Uniform('m', lower=-10., upper=10.)
+    c = pm.Uniform('c', lower=-10., upper=10.)
 
-    Arguments:
-    params(array):      model parameters
-    x (array):          the dependent variable that our model requires
-    Returns:
-    P (matrix):         value of pressure 2N x endtime
-    T (matrix):         value of temperature 2N x endtime
-    """
+    # convert m and c to a tensor vector
+    theta = tt.as_tensor_variable([m, c])
 
-    # Initialize parameters
-    H, φ, k_int, ct, Q, cs = params
-    K = k_int / aquifer.mu
+    # use a DensityDist
+    pm.DensityDist(
+        'likelihood',
+        lambda v: logl(v),
+        observed={'v': theta},
+        random=my_model_random,
+    )
 
-    # Initialize boundary conditions
-    pref = aquifer.pref
-    rw = aquifer.rw
-    rmax = aquifer.rmax
+    trace = pm.sample(ndraws, cores=1, chains=chains, tune=nburn, discard_tuned_samples=True)
+    # trace = pm.sample(ndraws, tune=nburn, discard_tuned_samples=True)
 
-    # Calculate when drawdown ends
-    t1endstep = math.floor(0.5*(len(x)-1))
-    t1end = x[t1endstep]
-    timestep = x[1] - x[0]
+# plot the traces
+    print(az.summary(trace, round_to=2))
+_ = pm.traceplot(trace, lines=(('m', {}, [mtrue]), ('c', {}, [ctrue])))
 
-    # Generate empty pressure array
-    size=N
-    pexact = np.zeros([size, len(x)])
-    Texact = np.zeros([size, len(x)])
+# put the chains in an array (for later!)
+samples_pymc3_2 = np.vstack((trace['m'], trace['c'])).T
 
-    # compute analytical solution
-    for index in range(size):  # print("index", index, H[index], φ[index], K[index], ct[index], Q[index])
-        with treelog.iter.fraction('step', range(len(x))) as counter:
-            for istep in counter:
-                time = timestep * istep
+# just because we can, let's draw posterior predictive samples of the model
+ppc = pm.sample_posterior_predictive(trace, samples=250, model=opmodel)
 
-                if time <= t1end:
-                    pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
-                                                          time)
-                    Texact[index, istep] = 0
+_, ax = plt.subplots()
 
-                else:
-                    pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
-                                                          time)
-                    # pexact[index, istep] = get_p_buildup(H, φ, K, ct, Q, rw, pref,
-                    #                                      t1end, time)
-                    Texact[index, istep] = 0
+for vals in ppc['likelihood']:
+    plt.plot(x, vals, color='b', alpha=0.05, lw=3)
+ax.plot(x, my_model((mtrue, ctrue), x), 'k--', lw=2)
 
-    return pexact, Texact
+ax.set_xlabel("Predictor (stdz)")
+ax.set_ylabel("Outcome (stdz)")
+ax.set_title("Posterior predictive checks");
+
+plt.show()
+
+###########################
+#     Simple PyMC3 dis    #
+###########################
+
+with pm.Model() as pymodel:
+    # uniform priors on m and c
+    m = pm.Uniform('m', lower=-10., upper=10.)
+    c = pm.Uniform('c', lower=-10., upper=10.)
+
+    # convert m and c to a tensor vector
+    theta = tt.as_tensor_variable([m, c])
+
+    # use a Normal distribution
+    pm.Normal('likelihood', mu=(m * x + c), sd=sigma, observed=data)
+
+    trace = pm.sample(ndraws, cores=1, chains=chains, tune=nburn, discard_tuned_samples=True)
+
+# plot the traces
+_ = pm.traceplot(trace, lines=(('m', {}, [mtrue]), ('c', {}, [ctrue])))
+
+# put the chains in an array (for later!)
+samples_pymc3_3 = np.vstack((trace['m'], trace['c'])).T
+
+###########################
+#     Postprocessing      #
+###########################
+
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)  # supress emcee autocorr FutureWarning
+
+matplotlib.rcParams['font.size'] = 22
+
+hist2dkwargs = {'plot_datapoints': False,
+                'plot_density': False,
+                'levels': 1.0 - np.exp(-0.5 * np.arange(1.5, 2.1, 0.5) ** 2)} # roughly 1 and 2 sigma
+
+colors = ['r', 'g', 'b']
+labels = ['Theanp Op (no grad)', 'Theano Op (with grad)', 'Pure PyMC3']
+
+for i, samples in enumerate([samples_pymc3_2, samples_pymc3_3]):
+    # get maximum chain autocorrelartion length
+    autocorrlen = int(np.max(emcee.autocorr.integrated_time(samples, c=3)));
+    print('Auto-correlation length ({}): {}'.format(labels[i], autocorrlen))
+
+    if i == 0:
+        fig = corner.corner(samples, labels=[r"$m$", r"$c$"], color=colors[i],
+                            hist_kwargs={'density': True}, **hist2dkwargs,
+                            truths=[mtrue, ctrue])
+    else:
+        corner.corner(samples, color=colors[i], hist_kwargs={'density': True},
+                      fig=fig, **hist2dkwargs)
+
+fig.set_size_inches(9, 9)
+
+# test the gradient Op by direct call
+theano.config.compute_test_value = "ignore"
+theano.config.exception_verbosity = "high"
+
+var = tt.dvector()
+test_grad_op = LogLikeGrad(my_loglike, data, x, sigma)
+test_grad_op_func = theano.function([var], test_grad_op(var))
+grad_vals = test_grad_op_func([mtrue, ctrue])
+
+print('Gradient returned by "LogLikeGrad": {}'.format(grad_vals))
+
+# test the gradient called through LogLikeWithGrad
+test_gradded_op = LogLikeWithGrad(my_loglike, data, x, sigma)
+test_gradded_op_grad = tt.grad(test_gradded_op(var), var)
+test_gradded_op_grad_func = theano.function([var], test_gradded_op_grad)
+grad_vals_2 = test_gradded_op_grad_func([mtrue, ctrue])
+
+print('Gradient returned by "LogLikeWithGrad": {}'.format(grad_vals_2))
+
+# test the gradient that PyMC3 uses for the Normal log likelihood
+test_model = pm.Model()
+with test_model:
+    m = pm.Uniform('m', lower=-10., upper=10.)
+    c = pm.Uniform('c', lower=-10., upper=10.)
+
+    pm.Normal('likelihood', mu=(m*x + c), sigma=sigma, observed=data)
+
+    gradfunc = test_model.logp_dlogp_function([m, c], dtype=None)
+    gradfunc.set_extra_values({'m_interval__': mtrue, 'c_interval__': ctrue})
+    grad_vals_pymc3 = gradfunc(np.array([mtrue, ctrue]))[1]  # get dlogp values
+
+print('Gradient returned by PyMC3 "Normal" distribution: {}'.format(grad_vals_pymc3))
+
+# profile logpt using our Op
+opmodel.profile(opmodel.logpt).summary()
+
+# profile using our PyMC3 distribution
+pymodel.profile(pymodel.logpt).summary()
+
+
+
+
+

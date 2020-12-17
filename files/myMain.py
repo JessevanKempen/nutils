@@ -1,13 +1,34 @@
+import numpy as np
+import pymc3 as pm
+import theano
+import theano.tensor as tt
+
+# for reproducibility here's some version info for modules used in this notebook
+import platform
+import IPython
+import matplotlib
+import matplotlib.pyplot as plt
+import emcee
+import corner
+import os
+from autograd import grad
+print("Python version:     {}".format(platform.python_version()))
+print("IPython version:    {}".format(IPython.__version__))
+print("Numpy version:      {}".format(np.__version__))
+print("Theano version:     {}".format(theano.__version__))
+print("PyMC3 version:      {}".format(pm.__version__))
+print("Matplotlib version: {}".format(matplotlib.__version__))
+print("emcee version:      {}".format(emcee.__version__))
+print("corner version:     {}".format(corner.__version__))
+
+import numpy as np
+import pymc3 as pm
+import arviz as az
+
 #Ordering imports
 from myIOlib import *
-from myUQlib import *
-from myFUQlib import *
-
-from myUQ import *
-# from myFUQ import *
-from myFUQlib import *
-from myFUQ import *
 from myModel import *
+from myFUQ import *
 
 #Ordering tools
 import numpy as np
@@ -26,11 +47,11 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 2
+N = 1
 
 # Define time of simulation
 timestep = 60
-endtime = 3600
+endtime = 360
 t1steps = round(endtime / timestep)
 Nt = 2*t1steps+1
 
@@ -53,6 +74,9 @@ params_aquifer, params_well = read_from_txt( "parameters.txt" )
 print("Constructing the doublet model...")
 aquifer = Aquifer(params_aquifer)
 doublet = DoubletGenerator(aquifer, aquifer.pref) #Initial well pressure at start
+
+from myUQ import *
+from files.myUQlib import *
 
 ######## Forward Uncertainty Quantification #########
 if not performInference:
@@ -103,8 +127,10 @@ else:
     from pymc3.distributions.timeseries import EulerMaruyama
     print('Running on PyMC3 v{}'.format(pm.__version__))
 
-    # Amount of chains
+    # Set distribution settings
     chains = 4
+    ndraws = 400  # number of draws from the distribution
+    nburn = 10  # number of "burn-in points" (which we'll discard)
 
     # Library functions
     def get_𝜇_K(porosity, size):
@@ -128,36 +154,165 @@ else:
     #     Synthetic data      #
     ###########################
 
-    with pm.Model() as SyntheticModel:
+    # Set up our data
+    Nt = Nt     # number of data points
+    sigma = 0.25# standard deviation of noise
+    x = timestep * np.linspace(0, 2*t1steps, Nt)
 
-        # True data (what actually drives the true pressure)
-        K_true = 1e-12  # 2.2730989084434785e-08
-        φ_true = 0.163
-        H_true = 70
-        ct_true = 1e-10
-        Q_true = 0.07
-        cs_true = 2650
+    # True data
+    K_true = 1e-12  # 2.2730989084434785e-08
+    φ_true = 0.163
+    H_true = 70
+    ct_true = 1e-10
+    Q_true = 0.07
+    cs_true = 2650
 
-        # Lognormal priors for true parameters
-        Hpdf = pm.Lognormal('H', mu=np.log(H_true), sd=0.01)
-        φpdf = pm.Lognormal('φ', mu=np.log(φ_true), sd=0.01)
-        Kpdf = pm.Lognormal('K', mu=np.log(K_true), sd=0.01)
-        ctpdf = pm.Lognormal('ct', mu=np.log(ct_true), sd=0.01)
-        Qpdf = pm.Lognormal('Q', mu=np.log(Q_true), sd=0.01)
-        cspdf = pm.Lognormal('cs', mu=np.log(cs_true), sd=0.01)
-        parametersRVS = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt),
-                         Qpdf.random(size=Nt), cspdf.random(size=Nt)]
+    # Lognormal priors for true parameters
+    Hpdf = stats.lognorm(scale=H_true, s=0.01)
+    φpdf = stats.lognorm(scale=φ_true, s=0.01)
+    Kpdf = stats.lognorm(scale=K_true, s=0.01)
+    ctpdf = stats.lognorm(scale=ct_true, s=0.01)
+    Qpdf = stats.lognorm(scale=Q_true, s=0.01)
+    cspdf = stats.lognorm(scale=cs_true, s=0.01)
+    theta = parametersRVS = [Hpdf.rvs(size=1), φpdf.rvs(size=1), Kpdf.rvs(size=1), ctpdf.rvs(size=1),
+                     Qpdf.rvs(size=1), cspdf.rvs(size=1)]
 
-        # parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
-        solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
-        p_true = np.mean(solAA[0].T, axis=1)
-        print(p_true)
+    # parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
+    # theta = parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
 
-        # Z_t observed data
-        np.random.seed(716742)  # set random seed, so the data is reproducible each time
-        σnoise = 0.1
-        sd_p = σnoise * np.var(p_true) ** 0.5
-        z_t = p_true + np.random.randn(Nt) * sd_p
+    # truemodel = my_model(theta, x)
+    # truemodel = performAA(theta, aquifer, 2, timestep, endtime)
+    truemodel = my_model(theta, x)
+    print("truemodel", truemodel)
+
+    # Make data
+    np.random.seed(716742)  # set random seed, so the data is reproducible each time
+    sd_p = sigma * np.var(truemodel) ** 0.5
+    data = sd_p * np.random.randn(Nt) + truemodel
+
+    # plot transient test
+    plt.figure(figsize=(10, 3))
+    plt.subplot(121)
+    plt.plot(truemodel, 'k', label='$p(t)$', alpha=0.5), plt.plot(data, 'r', label='$z(t)$', alpha=0.5)
+    plt.title('Transient'), plt.legend()
+    plt.tight_layout()
+
+    plt.show()
+
+    # Create our Op
+    logl = LogLikeWithGrad(my_loglike, data, x, sigma)
+    print(logl)
+
+    ###########################
+    #     Synthetic data      #
+    ###########################
+
+    # with pm.Model() as SyntheticModel:
+    #
+    #     # True data (what actually drives the true pressure)
+    #     K_true = 1e-12  # 2.2730989084434785e-08
+    #     φ_true = 0.163
+    #     H_true = 70
+    #     ct_true = 1e-10
+    #     Q_true = 0.07
+    #     cs_true = 2650
+    #
+    #     # Lognormal priors for true parameters
+    #     Hpdf = pm.Lognormal('H', mu=np.log(H_true), sd=0.01)
+    #     φpdf = pm.Lognormal('φ', mu=np.log(φ_true), sd=0.01)
+    #     Kpdf = pm.Lognormal('K', mu=np.log(K_true), sd=0.01)
+    #     ctpdf = pm.Lognormal('ct', mu=np.log(ct_true), sd=0.01)
+    #     Qpdf = pm.Lognormal('Q', mu=np.log(Q_true), sd=0.01)
+    #     cspdf = pm.Lognormal('cs', mu=np.log(cs_true), sd=0.01)
+    #     parametersRVS = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt),
+    #                      Qpdf.random(size=Nt), cspdf.random(size=Nt)]
+    #
+    #     # parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
+    #     solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
+    #     p_true = np.mean(solAA[0].T, axis=1)
+    #     print(p_true)
+    #
+    #     # Z_t observed data
+    #     np.random.seed(716742)  # set random seed, so the data is reproducible each time
+    #     σnoise = 0.1
+    #     sd_p = σnoise * np.var(p_true) ** 0.5
+    #     z_t = p_true + np.random.randn(Nt) * sd_p
+
+    # use PyMC3 to sampler from log-likelihood
+    with pm.Model() as opmodel:
+        ###########################
+        #    Prior information    #
+        ###########################
+
+        # Mean of expert variables (the specific informative prior)
+        𝜇_H = aquifer.H                      # lower_H = 35, upper_H = 105 (COV = 50%)
+        𝜇_φ = aquifer.φ                      # lower_φ = 0.1, upper_φ = 0.3 (COV = 50%)
+        𝜇_ct = aquifer.ct                    # lower_ct = 0.5e-10, upper_ct = 1.5e-10 (COV = 50%)
+        𝜇_Q = aquifer.Q                      # lower_Q = 0.35, upper_Q = 0.105 (COV = 50%)
+        𝜇_cs = aquifer.cps                   # lower_cs = 1325 upper_cs = 3975 (COV = 50%)
+
+        # Standard deviation of variables (CV=50%)
+        sd_H = 0.3
+        sd_φ = 0.3
+        sd_K = 0.3
+        sd_ct = 0.3
+        sd_Q = 0.3
+        sd_cs = 0.001
+
+        # Lognormal priors for unknown model parameters
+        Hpdf = pm.Uniform('H', lower=35, upper=105)
+        φpdf = pm.Uniform('φ', lower=0.1, upper=0.3)
+        Kpdf = pm.Uniform('K', lower=0.5e-12, upper=1.5e-12)
+        ctpdf = pm.Uniform('ct', lower=0.5e-10, upper=1.5e-10)
+        Qpdf = pm.Uniform('Q', lower=0.035, upper=0.105)
+        cspdf = pm.Uniform('cs', lower=1325, upper=3975)
+
+        # Hpdf = pm.Lognormal('H', mu=np.log(𝜇_H), sd=sd_H)
+        # φpdf = pm.Lognormal('φ', mu=np.log(𝜇_φ), sd=sd_φ)
+        # Kpdf = pm.Lognormal('K', mu=np.log(get_𝜇_K(φpdf, N)), sd=sd_K)
+        # ctpdf = pm.Lognormal('ct', mu=np.log(𝜇_ct), sd=sd_ct)
+        # Qpdf = pm.Lognormal('Q', mu=np.log(𝜇_Q), sd=sd_Q)
+        # cspdf = pm.Lognormal('cs', mu=np.log(𝜇_cs), sd=sd_cs)
+        thetaprior = [Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf]
+
+        # convert thetaprior to a tensor vector
+        theta = tt.as_tensor_variable([Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf])
+
+        # use a DensityDist
+        pm.DensityDist(
+            'likelihood',
+            lambda v: logl(v),
+            observed={'v': theta},
+            random=my_model_random
+        )
+
+    with opmodel:
+
+        # Inference
+        trace = pm.sample(ndraws, cores=1, chains=chains, tune=nburn, discard_tuned_samples=True)
+
+        # plot the traces
+        print(az.summary(trace, round_to=2))
+
+    _ = pm.traceplot(trace, lines=(('K', {}, [K_true ]), ('φ', {}, [φ_true])))
+
+    # put the chains in an array (for later!)
+    samples_pymc3_2 = np.vstack((trace['K'], trace['φ'], trace['H'], trace['ct'], trace['Q'], trace['cs'])).T
+
+    # just because we can, let's draw posterior predictive samples of the model
+    ppc = pm.sample_posterior_predictive(trace, samples=250, model=opmodel)
+
+    _, ax = plt.subplots()
+
+    for vals in ppc['likelihood']:
+        plt.plot(x, vals, color='b', alpha=0.05, lw=3)
+    ax.plot(x, my_model([H_true, φ_true, K_true, ct_true, Q_true, cs_true], x), 'k--', lw=2)
+
+    ax.set_xlabel("Predictor (stdz)")
+    ax.set_ylabel("Outcome (stdz)")
+    ax.set_title("Posterior predictive checks");
+
+    plt.show()
 
     with pm.Model() as PriorModel:
         ###########################
@@ -194,21 +349,21 @@ else:
         # ctpdf = pm.Uniform('ct', lower=0.5e-10, upper=1.5e-10)
         # Qpdf = pm.Uniform('Q', lower=0.035, upper=0.105)
         # cspdf = pm.Uniform('cs', lower=1325, upper=3975)
-        parametersRVS = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt), Qpdf.random(size=Nt), cspdf.random(size=Nt)]
+        theta = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt), Qpdf.random(size=Nt), cspdf.random(size=Nt)]
 
         # Run Analytical Analysis (Backward)
         print("\r\nRunning Analytical Analysis... (Prior, pymc3)")
-        solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
-        p_t = np.mean(solAA[0].T, axis=1)     # draw single sample multiple points in time
+        p_t = my_model(theta, x) # draw single sample multiple points in time
+        # p_t = np.mean(solAA[0].T, axis=1)     # draw single sample multiple points in time
         print(p_t)
 
         # Likelihood (sampling distribution) of observations
-        z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=σnoise, observed=np.log(z_t))
+        z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=sigma, observed=np.log(data))
 
         # plot transient test
         plt.figure(figsize=(10, 3))
         plt.subplot(121)
-        plt.plot(p_t, 'k', label='$p(t)$', alpha=0.5), plt.plot(z_t, 'r', label='$z(t)$', alpha=0.5)
+        plt.plot(p_t, 'k', label='$p(t)$', alpha=0.5), plt.plot(data, 'r', label='$z(t)$', alpha=0.5)
         plt.title('Transient'), plt.legend()
         plt.tight_layout()
 
@@ -228,7 +383,7 @@ else:
     with PriorModel:
         # Inference
         start = pm.find_MAP()                      # Find starting value by optimization
-        step = pm.NUTS(scaling=start)     # Instantiate MCMC sampling algoritm #HamiltonianMC
+        step = pm.NUTS(scaling=start)              # Instantiate MCMC sampling algoritm #HamiltonianMC
 
         trace = pm.sample(10000, start=start, step=step, cores=1, chains=chains)
 

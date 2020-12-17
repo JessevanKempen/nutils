@@ -9,8 +9,6 @@ import pandas as pd
 # import seaborn as sns
 import matplotlib.pyplot as plt
 import math
-from files.myUQlib import *
-from files.myModel import *
 
 #################### Doublet model library #########################
 #Objects

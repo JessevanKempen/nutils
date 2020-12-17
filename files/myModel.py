@@ -15,8 +15,6 @@ sns.set_style("whitegrid")
 
 unit = types.unit(m=1, s=1, g=1e-3, K=1, N='kg*m/s2', Pa='N/m2', J='N*m', W='J/s', L='dm3', D='0.9869μm2')
 
-from files.myIOlib import *
-from files.myUQ import *
 from files.myModellib import *
 
 def main(aquifer, degree:int, btype:str, elems:int, rw:unit['m'], rmax:unit['m'], H:unit['m'], mu:unit['Pa*s'], φ:float, ctinv:unit['Pa'], k_int:unit['m2'], Q:unit['m3/s'], timestep:unit['s'], t1endtime:unit['s']):
