@@ -129,8 +129,8 @@ else:
 
     # Set distribution settings
     chains = 4
-    ndraws = 400  # number of draws from the distribution
-    nburn = 10  # number of "burn-in points" (which we'll discard)
+    ndraws = 4000  # number of draws from the distribution
+    nburn = 100  # number of "burn-in points" (which we'll discard)
 
     # Library functions
     def get_𝜇_K(porosity, size):
@@ -282,8 +282,8 @@ else:
         pm.DensityDist(
             'likelihood',
             lambda v: logl(v),
-            observed={'v': theta},
-            random=my_model_random
+            observed={'v': theta}
+            # random=my_model_random
         )
 
     with opmodel:
@@ -297,20 +297,43 @@ else:
     _ = pm.traceplot(trace, lines=(('K', {}, [K_true ]), ('φ', {}, [φ_true])))
 
     # put the chains in an array (for later!)
-    samples_pymc3_2 = np.vstack((trace['K'], trace['φ'], trace['H'], trace['ct'], trace['Q'], trace['cs'])).T
+    # samples_pymc3_2 = np.vstack((trace['K'], trace['φ'], trace['H'], trace['ct'], trace['Q'], trace['cs'])).T
 
     # just because we can, let's draw posterior predictive samples of the model
-    ppc = pm.sample_posterior_predictive(trace, samples=250, model=opmodel)
+    # ppc = pm.sample_posterior_predictive(trace, samples=250, model=opmodel)
 
-    _, ax = plt.subplots()
+    # _, ax = plt.subplots()
+    #
+    # for vals in ppc['likelihood']:
+    #     plt.plot(x, vals, color='b', alpha=0.05, lw=3)
+    # ax.plot(x, my_model([H_true, φ_true, K_true, ct_true, Q_true, cs_true], x), 'k--', lw=2)
+    #
+    # ax.set_xlabel("Predictor (stdz)")
+    # ax.set_ylabel("Outcome (stdz)")
+    # ax.set_title("Posterior predictive checks");
 
-    for vals in ppc['likelihood']:
-        plt.plot(x, vals, color='b', alpha=0.05, lw=3)
-    ax.plot(x, my_model([H_true, φ_true, K_true, ct_true, Q_true, cs_true], x), 'k--', lw=2)
 
-    ax.set_xlabel("Predictor (stdz)")
-    ax.set_ylabel("Outcome (stdz)")
-    ax.set_title("Posterior predictive checks");
+    plt.show()
+    data_spp = az.from_pymc3(trace=trace)
+    trace_K = az.plot_posterior(data_spp, var_names=['K'], kind='hist')
+    trace_φ = az.plot_posterior(data_spp, var_names=['φ'], kind='hist')
+    trace_H = az.plot_posterior(data_spp, var_names=['H'], kind='hist')
+    trace_Q = az.plot_posterior(data_spp, var_names=['Q'], kind='hist')
+    trace_ct = az.plot_posterior(data_spp, var_names=['ct'], kind='hist')
+    trace_cs = az.plot_posterior(data_spp, var_names=['cs'], kind='hist')
+    joint_plt = az.plot_joint(data_spp, var_names=['K', 'φ'], kind='kde', fill_last=False);
+    trace_fig = az.plot_trace(trace, var_names=[ 'H', 'φ', 'K', 'ct', 'Q', 'cs'], figsize=(12, 8));
+    az.plot_trace(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], compact=True);
+
+    a = np.random.uniform(0.1, 0.3)
+    b = np.random.uniform(0.5e-12, 1.5e-12)
+    plt.show()
+
+    _, ax = plt.subplots(1, 2, figsize=(10, 4))
+    az.plot_dist(a, color="C1", label="Prior", ax=ax[0])
+    az.plot_posterior(data_spp, color="C2", var_names=['φ'], ax=ax[1], kind='hist')
+    # az.plot_dist(b, color="C1", label="Prior", ax=ax[1])
+    # az.plot_posterior(data_spp, color="C2", var_names=['K'], label="Posterior",  ax=ax[0], kind='hist')
 
     plt.show()
 

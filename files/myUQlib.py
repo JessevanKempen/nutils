@@ -4,9 +4,8 @@ import numpy as np, treelog
 from pymc3.distributions import Interpolated
 import theano.tensor as tt
 
-from files.myMain import aquifer
-from files.myMain import N
 from files.myModel import *
+from files.myMain import N, aquifer
 
 def get_samples_porosity(size):
     # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
@@ -424,10 +423,10 @@ def performAA(params, x):
                     Texact[index, istep] = 0
 
                 else:
-                    pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
-                                                          time)
-                    # pexact[index, istep] = get_p_buildup(H, φ, K, ct, Q, rw, pref,
-                    #                                      t1end, time)
+                    # pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
+                    #                                       time)
+                    pexact[index, istep] = get_p_buildup(H, φ, K, ct, Q, rw, pref,
+                                                         t1end, time)
                     Texact[index, istep] = 0
 
     return pexact, Texact
