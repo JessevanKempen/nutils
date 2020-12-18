@@ -47,16 +47,17 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 1
+N = 1000
 
 # Define time of simulation
 timestep = 60
-endtime = 360
+endtime = 3600
 t1steps = round(endtime / timestep)
 Nt = 2*t1steps+1
+x = timestep * np.linspace(0, 2 * t1steps, Nt)
 
 # Forward/Bayesian Inference calculation
-performInference = True
+performInference = False
 useFEA = False
 
 # Location to store output
@@ -101,7 +102,7 @@ if not performInference:
     else:
         # # Run Analytical Analysis (Forward)
         print("\r\nRunning Analytical Analysis...")
-        sol = performAA(parametersRVS, aquifer, N, timestep, endtime)
+        sol = my_model(parametersRVS, x)
 
     ###########################
     #     Post processing     #
@@ -130,7 +131,7 @@ else:
     # Set distribution settings
     chains = 4
     ndraws = 4000  # number of draws from the distribution
-    nburn = 100  # number of "burn-in points" (which we'll discard)
+    nburn = 0   # number of "burn-in points" (which we'll discard)
 
     # Library functions
     def get_𝜇_K(porosity, size):
@@ -156,8 +157,7 @@ else:
 
     # Set up our data
     Nt = Nt     # number of data points
-    sigma = 0.25# standard deviation of noise
-    x = timestep * np.linspace(0, 2*t1steps, Nt)
+    CV = 0.001  # coefficient of variation noise
 
     # True data
     K_true = 1e-12  # 2.2730989084434785e-08
@@ -180,21 +180,23 @@ else:
     # parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
     # theta = parametersRVS = [H_true, φ_true, K_true, ct_true, Q_true, cs_true]
 
-    # truemodel = my_model(theta, x)
-    # truemodel = performAA(theta, aquifer, 2, timestep, endtime)
     truemodel = my_model(theta, x)
     print("truemodel", truemodel)
 
     # Make data
     np.random.seed(716742)  # set random seed, so the data is reproducible each time
-    sd_p = sigma * np.var(truemodel) ** 0.5
-    data = sd_p * np.random.randn(Nt) + truemodel
+    sigma = CV * np.mean(truemodel)
+    data = sigma * np.random.randn(Nt) + truemodel
 
     # plot transient test
+    parameters = {'axes.labelsize': 14,
+                  'axes.titlesize': 18}
+    plt.rcParams.update(parameters)
+    MPA = 10e6
     plt.figure(figsize=(10, 3))
-    plt.subplot(121)
-    plt.plot(truemodel, 'k', label='$p(t)$', alpha=0.5), plt.plot(data, 'r', label='$z(t)$', alpha=0.5)
-    plt.title('Transient'), plt.legend()
+    # plt.subplot(121)
+    plt.plot(truemodel/MPA, 'k', label='$p_{true}$', alpha=0.5), plt.plot(data/MPA, 'r', label='$σ_{noise} = 1.0e-2$', alpha=0.5),\
+    plt.ylabel("p(t) [MPa]"), plt.xlabel("t [min]"), plt.legend()
     plt.tight_layout()
 
     plt.show()
@@ -294,7 +296,8 @@ else:
         # plot the traces
         print(az.summary(trace, round_to=2))
 
-    _ = pm.traceplot(trace, lines=(('K', {}, [K_true ]), ('φ', {}, [φ_true])))
+    _ = pm.traceplot(trace, lines=(('K', {}, [K_true ]), ('φ', {}, [φ_true]), ('H', {}, [H_true]), ('ct', {}, [ct_true])
+                                   , ('Q', {}, [Q_true]), ('cs', {}, [cs_true])))
 
     # put the chains in an array (for later!)
     # samples_pymc3_2 = np.vstack((trace['K'], trace['φ'], trace['H'], trace['ct'], trace['Q'], trace['cs'])).T
@@ -312,8 +315,23 @@ else:
     # ax.set_ylabel("Outcome (stdz)")
     # ax.set_title("Posterior predictive checks");
 
+    ###########################
+    #     Post processing     #
+    ###########################
+    # print('Posterior distributions.')
+    # cmap = mpl.cm.autumn
+    # for param in ['K', 'φ', 'H', 'ct', 'Q', 'cs']:
+    #     plt.figure(figsize=(8, 2))
+    #     samples = trace[param]
+    #     smin, smax = np.min(samples), np.max(samples)
+    #     x = np.linspace(smin, smax, 100)
+    #     y = stats.gaussian_kde(samples)(x)
+    #     plt.axvline({'K': K_true, 'φ': φ_true, 'H': H_true, 'ct': ct_true, 'Q': Q_true, 'cs': cs_true}[param], c='k')
+    #     plt.ylabel('Probability density')
+    #     plt.title(param)
+    #
+    # plt.tight_layout();
 
-    plt.show()
     data_spp = az.from_pymc3(trace=trace)
     trace_K = az.plot_posterior(data_spp, var_names=['K'], kind='hist')
     trace_φ = az.plot_posterior(data_spp, var_names=['φ'], kind='hist')
@@ -322,16 +340,15 @@ else:
     trace_ct = az.plot_posterior(data_spp, var_names=['ct'], kind='hist')
     trace_cs = az.plot_posterior(data_spp, var_names=['cs'], kind='hist')
     joint_plt = az.plot_joint(data_spp, var_names=['K', 'φ'], kind='kde', fill_last=False);
-    trace_fig = az.plot_trace(trace, var_names=[ 'H', 'φ', 'K', 'ct', 'Q', 'cs'], figsize=(12, 8));
-    az.plot_trace(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], compact=True);
+    # trace_fig = az.plot_trace(trace, var_names=[ 'H', 'φ', 'K', 'ct', 'Q', 'cs'], compact=True);
 
-    a = np.random.uniform(0.1, 0.3)
-    b = np.random.uniform(0.5e-12, 1.5e-12)
     plt.show()
 
-    _, ax = plt.subplots(1, 2, figsize=(10, 4))
-    az.plot_dist(a, color="C1", label="Prior", ax=ax[0])
-    az.plot_posterior(data_spp, color="C2", var_names=['φ'], ax=ax[1], kind='hist')
+    # a = np.random.uniform(0.1, 0.3)
+    # b = np.random.uniform(0.5e-12, 1.5e-12)
+    # _, ax = plt.subplots(1, 2, figsize=(10, 4))
+    # az.plot_dist(a, color="C1", label="Prior", ax=ax[0])
+    # az.plot_posterior(data_spp, color="C2", var_names=['φ'], ax=ax[1], kind='hist')
     # az.plot_dist(b, color="C1", label="Prior", ax=ax[1])
     # az.plot_posterior(data_spp, color="C2", var_names=['K'], label="Posterior",  ax=ax[0], kind='hist')
 
@@ -372,23 +389,15 @@ else:
         # ctpdf = pm.Uniform('ct', lower=0.5e-10, upper=1.5e-10)
         # Qpdf = pm.Uniform('Q', lower=0.035, upper=0.105)
         # cspdf = pm.Uniform('cs', lower=1325, upper=3975)
-        theta = [Hpdf.random(size=Nt), φpdf.random(size=Nt), Kpdf.random(size=Nt), ctpdf.random(size=Nt), Qpdf.random(size=Nt), cspdf.random(size=Nt)]
+        theta = [Hpdf.random(size=1), φpdf.random(size=1), Kpdf.random(size=1), ctpdf.random(size=1), Qpdf.random(size=1), cspdf.random(size=1)]
 
         # Run Analytical Analysis (Backward)
         print("\r\nRunning Analytical Analysis... (Prior, pymc3)")
-        p_t = my_model(theta, x) # draw single sample multiple points in time
+        # p_t = my_model(theta, x) # draw single sample multiple points in time
         # p_t = np.mean(solAA[0].T, axis=1)     # draw single sample multiple points in time
-        print(p_t)
 
         # Likelihood (sampling distribution) of observations
-        z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=sigma, observed=np.log(data))
-
-        # plot transient test
-        plt.figure(figsize=(10, 3))
-        plt.subplot(121)
-        plt.plot(p_t, 'k', label='$p(t)$', alpha=0.5), plt.plot(data, 'r', label='$z(t)$', alpha=0.5)
-        plt.title('Transient'), plt.legend()
-        plt.tight_layout()
+        # z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=sigma, observed=np.log(data))
 
         # plot 95% CI with seaborn
         # with open('pprior.npy', 'wb') as pprior:
@@ -403,31 +412,31 @@ else:
         # # Likelihood (predicted distribution) of observations
         # y = pm.Normal('y', mu=p, sd=1e4, observed=z_t)
 
-    with PriorModel:
-        # Inference
-        start = pm.find_MAP()                      # Find starting value by optimization
-        step = pm.NUTS(scaling=start)              # Instantiate MCMC sampling algoritm #HamiltonianMC
-
-        trace = pm.sample(10000, start=start, step=step, cores=1, chains=chains)
-
-    print(az.summary(trace, round_to=2))
+    # with PriorModel:
+    #     # Inference
+    #     start = pm.find_MAP()                      # Find starting value by optimization
+    #     step = pm.NUTS(scaling=start)              # Instantiate MCMC sampling algoritm #HamiltonianMC
+    #
+    #     trace = pm.sample(10000, start=start, step=step, cores=1, chains=chains)
+    #
+    # print(az.summary(trace, round_to=2))
 
     # chain_count = trace.get_values('K').shape[0]
     # T_pred = pm.sample_posterior_predictive(trace, samples=chain_count, model=PriorModel)
-    data_spp = az.from_pymc3(trace=trace)
+    # data_spp = az.from_pymc3(trace=trace)
     # joint_plt = az.plot_joint(data_spp, var_names=['K', 'φ'], kind='kde', fill_last=False);
     # trace_fig = az.plot_trace(trace, var_names=[ 'H', 'φ', 'K', 'ct', 'Q', 'cs'], figsize=(12, 8));
 
-    az.plot_trace(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], compact=True);
+    # az.plot_trace(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], compact=True);
 
     # fig, axes = az.plot_forest(trace, var_names=['H', 'φ', 'K', 'ct', 'Q'], combined=True)    #94% confidence interval with only lines (must normalize the means!)
     # axes[0].grid();
 
     # trace_H = az.plot_posterior(data_spp, var_names=['φ'], kind='hist')
     # trace_p = az.plot_posterior(data_spp, var_names=['p'], kind='hist')
-    pm.traceplot(trace)
+    # pm.traceplot(trace)
 
-    plt.show()
+    # plt.show()
 
     traces = [trace]
 
@@ -442,21 +451,33 @@ else:
             Q = from_posterior('Q', trace['Q'])
             cs = from_posterior('cs', trace['cs'])
 
-            parametersRVS = [H.random(size=Nt), φ.random(size=Nt), K.random(size=Nt), ct.random(size=Nt), Q.random(size=Nt), cs.random(size=Nt)]
-
-            # Run Analytical Analysis (Backward)
+            # Random sample method
+            # parametersRVS = [H.random(size=Nt), φ.random(size=Nt), K.random(size=Nt), ct.random(size=Nt), Q.random(size=Nt), cs.random(size=Nt)]
             print("\r\nRunning Analytical Analysis... (Backward, pymc3)")
-            solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
-            p_t = np.mean(solAA[0].T, axis=1)  # draw single sample multiple points in time
+            # solAA = performAA(parametersRVS, aquifer, N, timestep, endtime)
+            # p_t = np.mean(solAA[0].T, axis=1)  # draw single sample multiple points in time
 
             # Likelihood (sampling distribution) of observations
-            z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=sd_p, observed=np.log(z_t))
+            # z_h = pm.Lognormal('z_h', mu=np.log(p_t), sd=sd_p, observed=np.log(z_t))
 
             # Inference
-            start = pm.find_MAP()
-            step = pm.NUTS(scaling=start)
+            # start = pm.find_MAP()
+            # step = pm.NUTS(scaling=start)
+            # trace = pm.sample(ndraws, start=start, step=step, cores=1, chains=chains)
 
-            trace = pm.sample(10000, start=start, step=step, cores=1, chains=chains)
+            thetaprior = [H, φ, K, ct, Q, cs]
+
+            # convert thetaprior to a tensor vector
+            theta = tt.as_tensor_variable([H, φ, K, ct, Q, cs])
+
+            # use a DensityDist
+            pm.DensityDist(
+                'likelihood',
+                lambda v: logl(v),
+                observed={'v': theta}
+                # random=my_model_random
+            )
+            trace = pm.sample(ndraws, cores=1, chains=chains)
             traces.append(trace)
 
             # plt.figure(figsize=(10, 3))
