@@ -24,7 +24,8 @@ class Aquifer:
 
         #deterministic
         self.dtop = aquifer['dtop']          # depth to top aquifer
-        self.dpump = aquifer['dsensor']      # assuming data from sensor to represent pump node
+        self.dsensor = aquifer['dsensor']    # depth to esp sensor
+        self.dpump = aquifer['dpump']        # depth to pump location
         self.labda = aquifer['labda']        # geothermal gradient
         self.Tsur = aquifer['Tsurface']
         self.rhof = aquifer['rhof']
@@ -74,20 +75,21 @@ class DoubletGenerator:
         if params:
             # Initialize stoichastic parameters
             self.params = params
-            self.H = np.mean(params[0])
-            self.Q = np.mean(params[4])
+            # self.H = np.mean(params[0])
+            # self.Q = np.mean(params[4])
 
         # Set lengths in system
-        self.lpipe = self.z = self.aquifer.dtop + self.H
+        self.lpipe = self.z = self.aquifer.dsensor
         self.lpipe_divide = np.linspace(self.lpipe, 0, 200)
         self.dpump = self.aquifer.dpump
 
         # Set pump specs
         self.effpump = 0.61 # Efficiency of pump [-]
-        self.Ppump = 2.671e5 # Power of pump [W]
+        self.Ppump = 2.671e5/2 # Power of pump [W]
 
         # Evaluate objects within doublet
         self.T_wellbore = self.T_aqproducer = self._get_T(self.lpipe)
+        self.T_aqinjector = self.aquifer.Tinj
         self.P_aqproducer = self._get_pgz(self.aquifer.patm, self.lpipe, self.T_aqproducer)
         self.P_aqinjector = self._get_pgz(self.aquifer.patm, self.lpipe, self.aquifer.Tinj)
         self.q_heatloss_pipe = self._get_T_heatloss_pipe(self.lpipe_divide)
@@ -114,6 +116,8 @@ class DoubletGenerator:
 
     def get_pnode8(self, pnode9):
         pnode8 = pnode9 - self._get_pgz(0, (self.z - self.dpump), self.T_aqproducer) - self._get_pfriction(self.z - self.dpump)
+        print('loss of pressure by height', self._get_pgz(0, (self.z - self.dpump), self.T_aqproducer))
+        print('loss of pressure by friction', self._get_pfriction(self.z - self.dpump))
 
         return pnode8
 
@@ -123,17 +127,18 @@ class DoubletGenerator:
         return pnode7
 
     def get_pnode3(self, pnode4):
-        pnode3 = pnode4 - self._get_ppump(self.Ppump, self.Q)
+        pnode3 = pnode4 + self._get_pgz(0, self.dpump, self.T_aqproducer) + self._get_pfriction(self.dpump) #+ self._get_ppump(self.Ppump, self.Q)
 
         return pnode3
 
     def get_pnode2(self, pnode3):
-        pnode2 = pnode3 + self._get_pgz(self.aquifer.patm, self.z, self.T_aqproducer) + self._get_pfriction(self.z)
+        pnode2 = pnode3 + self._get_pgz(0, (self.z - self.dpump), self.T_aqinjector) + self._get_pfriction(self.z - self.dpump)
 
         return pnode2
 
     def _get_ppump(self, Ppump, Q):
         ppump = Ppump / (Q * self.effpump) # appropiate value is 20e5 Pa
+        print('pump added pressure', ppump)
 
         return ppump
 

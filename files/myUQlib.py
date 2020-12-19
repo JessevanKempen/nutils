@@ -9,7 +9,7 @@ from files.myMain import N, aquifer
 
 def get_samples_porosity(size):
     # distributionPorosity = stats.lognorm(s=0.2, scale=0.3)  # porosity 0 - 0.3 als primary data, permeability als secundary data
-    distributionPorosity = stats.lognorm(scale=0.2, s=0.25)
+    distributionPorosity = stats.lognorm(scale=0.2, s=0.01) #s=0.25
     samplesPorosity = distributionPorosity.rvs(size=size)
 
     return samplesPorosity
@@ -320,12 +320,12 @@ def my_model(theta, x):
 
 def generateRVSfromPDF(size):
     # Uniforme verdeling nodig bij gebruik van sensitiviteitsanalyse
-    Hpdf = H = np.random.uniform(low=90, high=110, size=size)
+    Hpdf = H = np.random.uniform(low=99, high=101, size=size)
     φpdf = φ = get_samples_porosity(size)  # joined distribution
     Kpdf = K = get_samples_permeability(φpdf, size)  # joined distribution
-    ctpdf = ct = np.random.uniform(low=1e-11, high=1e-9, size=size)
-    Qpdf = Q = np.random.uniform(low=0.1, high=1.0, size=size)
-    cspdf = cs = np.random.uniform(low=2400, high=2900, size=size)
+    ctpdf = ct = np.random.uniform(low=0.99e-10, high=1.01e-10, size=size)
+    Qpdf = Q = np.random.uniform(low=0.0693, high=0.0707, size=size)
+    cspdf = cs = np.random.uniform(low=2623.5, high=2676.5, size=size)
 
     parametersRVS = [Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf]
 
@@ -416,17 +416,21 @@ def performAA(params, x):
         with treelog.iter.fraction('step', range(len(x))) as counter:
             for istep in counter:
                 time = timestep * istep
-
                 if time <= t1end:
-                    pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
-                                                          time)
-                    Texact[index, istep] = 0
-
+                    try:
+                        pexact[index, istep] = get_p_drawdown(H[index], φ[index], K[index], ct[index], Q[index], rw, pref,
+                                                              time)
+                        Texact[index, istep] = 0
+                    except:
+                        pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
+                                                              time)
                 else:
-                    # pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
-                    #                                       time)
-                    pexact[index, istep] = get_p_buildup(H, φ, K, ct, Q, rw, pref,
+                    try:
+                        pexact[index, istep] = get_p_buildup(H[index], φ[index], K[index], ct[index], Q[index], rw, pref,
                                                          t1end, time)
-                    Texact[index, istep] = 0
+                        Texact[index, istep] = 0
+                    except:
+                        pexact[index, istep] = get_p_buildup(H, φ, K, ct, Q, rw, pref,
+                                                             t1end, time)
 
     return pexact, Texact

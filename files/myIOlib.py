@@ -125,10 +125,10 @@ def plot_solution(sol, outfile, title=None ):
     print( 'Output written to {}'.format( outfile ) )
 
 def show_seaborn_plot( filename, label):
+    print('filename', filename)
     with open(filename, 'rb') as file:
         data = np.transpose(np.load(file))
-
-    print(data)
+    print('data', data)
     df = pd.DataFrame(data[0:, 0:], columns=['f' + str(i) for i in range(data.shape[1])])
     # print(df)
 
@@ -139,14 +139,12 @@ def show_seaborn_plot( filename, label):
     ax = sns.lineplot(x='index',
                      y='value',
                      ci=95,
-                     style=True,
+                     #style=True,
                      dashes=[(2,2)],
                      legend="brief",
                      palette=("Blues_d"), #sns.color_palette('Greys')
                      hue_norm=mpl.colors.LogNorm(),
                      data=draw_df)
-    plt.xlabel("time [min]", size=10)
-    plt.ylabel("pressure [Pa]", size=10)
     plt.legend([label])
 
 def show_uniform_plot():

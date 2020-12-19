@@ -12,6 +12,9 @@ import emcee
 import corner
 import os
 from autograd import grad
+
+from files.myIOlib import show_seaborn_plot
+
 print("Python version:     {}".format(platform.python_version()))
 print("IPython version:    {}".format(IPython.__version__))
 print("Numpy version:      {}".format(np.__version__))
@@ -47,7 +50,7 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 1000
+N = 50
 
 # Define time of simulation
 timestep = 60
@@ -55,6 +58,9 @@ endtime = 3600
 t1steps = round(endtime / timestep)
 Nt = 2*t1steps+1
 x = timestep * np.linspace(0, 2 * t1steps, Nt)
+
+# Units
+MPA = 1e6
 
 # Forward/Bayesian Inference calculation
 performInference = False
@@ -102,7 +108,7 @@ if not performInference:
     else:
         # # Run Analytical Analysis (Forward)
         print("\r\nRunning Analytical Analysis...")
-        sol = my_model(parametersRVS, x)
+        sol = performAA(parametersRVS, x)
 
     ###########################
     #     Post processing     #
@@ -113,12 +119,14 @@ if not performInference:
     ax.set(xlabel='Wellbore pressure [Pa]', ylabel='Probability')
     ax.hist(sol[0][:, t1steps], density=True, histtype='stepfilled', alpha=0.2, bins=20)
 
-    plt.show()
+    # plt.show()
 
     # Evaluate the doublet model
     print("\r\nEvaluating numerical solution for the doublet model...")
     doublet = DoubletGenerator(aquifer, sol[0], parametersRVS, t1steps * 2 + 1)
     evaluateDoublet(doublet)
+
+    #output: nodesmatrix []
 
 ######## Inverse Uncertainty Quantification #########
 else:
@@ -192,11 +200,10 @@ else:
     parameters = {'axes.labelsize': 14,
                   'axes.titlesize': 18}
     plt.rcParams.update(parameters)
-    MPA = 10e6
     plt.figure(figsize=(10, 3))
     # plt.subplot(121)
     plt.plot(truemodel/MPA, 'k', label='$p_{true}$', alpha=0.5), plt.plot(data/MPA, 'r', label='$σ_{noise} = 1.0e-2$', alpha=0.5),\
-    plt.ylabel("p(t) [MPa]"), plt.xlabel("t [min]"), plt.legend()
+    plt.ylabel("p(t) [MPa]"), plt.xlabel("t [min]"), #plt.legend()
     plt.tight_layout()
 
     plt.show()
@@ -534,12 +541,32 @@ print("\r\nDone. Post-processing...")
 
 #################### Postprocessing #########################
 
-# plot 95% CI with seaborn
-with open('pprior.npy', 'wb') as pprior:
-    np.save(pprior, sol[0])
+###########################
+#     Post processing     #
+###########################
 
-show_seaborn_plot('pprior.npy', "p9")
+print('Post processing. Plot 95% CI with seaborn')
+my_list = [doublet.pnode2/MPA, doublet.pnode3/MPA, doublet.pnode4/MPA, doublet.pnode5/MPA, doublet.pnode6/MPA, doublet.pnode7/MPA, doublet.pnode8/MPA, doublet.pnode9/MPA]
+print(len(my_list))
+cmap = mpl.cm.autumn
+plt.figure(figsize=(8, 2))
+for node in range(len(my_list)):
+    with open('pnode' + str(node+2) + '.npy', 'wb') as f:
+        np.save(f, my_list[node])
+    show_seaborn_plot('pnode' + str(node+2) + '.npy', str(node+2))
+    # plt.legend(str(node+2))
+plt.xlabel("t [min]", size=14)
+plt.ylabel("p(t) [MPa]", size=14)
+plt.tight_layout();
+
 plt.show()
+
+# plot 95% CI with seaborn
+# with open('pprior.npy', 'wb') as pprior:
+#     np.save(pprior, sol[0])
+#
+# show_seaborn_plot('pprior.npy', "p9")
+# plt.show()
 
 # with open('pmatrix.npy', 'rb') as f:
 #     a = np.load(f)
@@ -548,7 +575,7 @@ plt.show()
 # plot 95% CI with seaborn
 # with open('pnode9.npy', 'wb') as f9:
 #     np.save(f9, doublet.pnode9)
-
+#
 # with open('pnode8.npy', 'wb') as f8:
 #     np.save(f8, doublet.pnode8)
 
