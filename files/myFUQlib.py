@@ -28,7 +28,7 @@ class Aquifer:
         self.dpump = aquifer['dpump']        # depth to pump location
         self.labda = aquifer['labda']        # geothermal gradient
         self.Tsur = aquifer['Tsurface']
-        self.rhof = aquifer['rhof']
+        self.ρf = self.rhof = aquifer['rhof']
         self.rhos = aquifer['rhos']
         self.cpf = aquifer['cpf']
         self.cps = aquifer['cps']            # stone specific heat capacity (limestone) [J/kg K]
@@ -49,6 +49,10 @@ class Aquifer:
         self.ε = aquifer['ε']                # tubing roughness [m]
         self.ct = aquifer['ct']
 
+        # total system (rock + fluid) variable
+        self.ρ = self.φ * self.rhof + (1 - self.φ) * self.rhos
+        self.cp = self.φ * self.cpf + (1 - self.φ) * self.cps
+        self.λ = self.φ * self.labdaf + (1 - self.φ) * self.labdas
 # class Well:
 #
 #     def __init__(self, well, aquifer):
@@ -64,42 +68,53 @@ class DoubletGenerator:
     Args:
 
     """
-    def __init__(self, aquifer, pnode9, params=None, tsteps=None):
+    def __init__(self, aquifer, sol, params=None):
 
         # Initialize deterministic parameters
         self.aquifer = aquifer
         self.time = 365*24*60*60 #1 year [s]
         self.H = self.aquifer.H
         self.Q = self.aquifer.Q
+        self.alpha = self.aquifer.labdas / ( self.aquifer.rhos * self.aquifer.cps) #thermal diffusion of rock
+        self.gamma = 0.577216 #euler constant
 
-        if params:
-            # Initialize stoichastic parameters
-            self.params = params
+        self.pnode9 = sol[0]
+        self.Tnode9 = sol[1]
+        self.Tinj = self.aquifer.Tinj * np.ones_like(self.Tnode9)
+
+        # if params:
+            # Stoichastic parameters with effect on well test
+            # self.params = params
             # self.H = np.mean(params[0])
             # self.Q = np.mean(params[4])
 
         # Set lengths in system
         self.lpipe = self.z = self.aquifer.dsensor
-        self.lpipe_divide = np.linspace(self.lpipe, 0, 200)
         self.dpump = self.aquifer.dpump
 
-        # Set pump specs
+        # Set specs
         self.effpump = 0.61 # Efficiency of pump [-]
+        self.eta = 0.61 # Efficiency of heat exchanger [-]
         self.Ppump = 2.671e5/2 # Power of pump [W]
 
         # Evaluate objects within doublet
-        self.T_wellbore = self.T_aqproducer = self._get_T(self.lpipe)
-        self.T_aqinjector = self.aquifer.Tinj
+        self.T_aqinjector = self.Tinj
+        self.T_aqproducer = self._get_Tz(self.lpipe)
         self.P_aqproducer = self._get_pgz(self.aquifer.patm, self.lpipe, self.T_aqproducer)
-        self.P_aqinjector = self._get_pgz(self.aquifer.patm, self.lpipe, self.aquifer.Tinj)
-        self.q_heatloss_pipe = self._get_T_heatloss_pipe(self.lpipe_divide)
-        self.T_HE = self._get_T_HE(self.lpipe_divide)
-        self.Power_HE = self.aquifer.mdot * self.aquifer.cpf * (self.T_HE - self.aquifer.Tinj)
-        self.P_pump = self._get_ppump(self.Ppump, self.Q)
+        self.P_aqinjector = self._get_pgz(self.aquifer.patm, self.lpipe, self.Tinj)
+        self.ppump = self._get_ppump(self.Ppump, self.Q)
+
+        # Evaluate Tnodes within doublet
+        self.Tnode10 = self.T_aqproducer # Tref when based on depth of sensor
+        self.Tnode8 = self.get_Tnode8(self.Tnode9)
+        self.Tnode6 = self.Tnode7 = self.get_Tnode7(self.Tnode9)
+        self.Tnode4 = self.Tnode5 = self.Tinj
+        self.Tnode3 = self.get_Tnode3(self.Tnode4)
+        self.Tnode2 = self.get_Twinj(self.z - self.dpump, self.Tinj)
+        self.Tnode1 = self.T_aqproducer
 
         # Evaluate pnodes within doublet
         self.pnode10 = self.P_aqproducer # pref when based on depth
-        self.pnode9 = pnode9
         self.pnode8 = self.get_pnode8(self.pnode9)
         self.pnode6 = self.pnode7 = self.get_pnode7(self.pnode8)
         self.pnode4 = self.pnode5 = self.pnode6
@@ -107,27 +122,67 @@ class DoubletGenerator:
         self.pnode2 = self.get_pnode2(self.pnode3)
         self.pnode1 = self.P_aqinjector # pref when based on depth and injection temperature
 
-    # def get_P_HE(self, D_in):
-    #     P_HE = self.P_wellproducer - self._get_P(self.aquifer.dtop + 0.5 * self.aquifer.H, self.T_aqproducer) -\
-    #     ( self._get_f( D_in) * self.aquifer.rhof * self.get_v_avg( D_in ) * (self.aquifer.dtop + 0.5 * self.aquifer.H) ) / 2 * D_in\
-    #            + self.P_pump
-    #
-    #     return P_HE
+        # Calculate power output system
+        self.Phe = self.aquifer.mdot * self.aquifer.cpf * (self.Tnode6 - self.Tinj)
+
+    def get_Tw(self, dz, Tw):
+        Tw = Tw.copy()
+        dl = 10 # pipe segment [m]
+        zi = np.linspace(self.z, self.z - dz, dz/dl + 1)
+
+        for i in range(len(zi)-1):
+            Tw -= dl * self._getqw(Tw, zi[i]) / ( self.aquifer.mdot * self.aquifer.cpf )
+        return Tw
+
+    def get_Twinj(self, dz, Tw):
+        Tw = Tw.copy()
+        dl = 10 # pipe segment [m]
+        zi = np.linspace(0, dz, dz/dl + 1)
+
+        for i in range(len(zi)-1):
+            Tw += dl * self._getqw(Tw, zi[i]) / ( self.aquifer.mdot * self.aquifer.cpf )
+
+        return Tw
+
+    def _getqw(self, Tw, zi):
+        qw = 4 * math.pi * self.aquifer.labdas * ( Tw - self._get_Tz(zi) ) / math.log( ( 4 * self.alpha * self.time ) / (math.exp(self.gamma) * self.aquifer.rw**2 ) )
+
+        return qw
+
+    def get_Tnode8(self, Tnode9):
+        Tnode8 = self.get_Tw(self.z - self.dpump, Tnode9)
+
+        return Tnode8
+
+    def get_Tnode7(self, Tnode9):
+        Tnode7 = self.get_Tw(self.z, Tnode9)
+
+        return Tnode7
+
+    def get_Tnode3(self, Tnode4):
+        Tnode3 = self.get_Twinj(self.dpump, Tnode4)
+
+        return Tnode3
+
+    def get_Tnode2(self, Tnode4):
+        Tnode2 = self.get_Twinj(self.z, Tnode4)
+
+        return Tnode2
 
     def get_pnode8(self, pnode9):
-        pnode8 = pnode9 - self._get_pgz(0, (self.z - self.dpump), self.T_aqproducer) - self._get_pfriction(self.z - self.dpump)
-        print('loss of pressure by height', self._get_pgz(0, (self.z - self.dpump), self.T_aqproducer))
-        print('loss of pressure by friction', self._get_pfriction(self.z - self.dpump))
+        pnode8 = pnode9 - self._get_pgz(0, (self.z - self.dpump), self.Tnode9) - self._get_pfriction(self.z - self.dpump)
+        # print('loss of pressure by height', self._get_pgz(0, (self.z - self.dpump), self.Tnode9))
+        # print('loss of pressure by friction', self._get_pfriction(self.z - self.dpump))
 
         return pnode8
 
     def get_pnode7(self, pnode8):
-        pnode7 = pnode8 - self._get_pgz(0, self.dpump, self.T_aqproducer) - self._get_pfriction(self.dpump) + self._get_ppump(self.Ppump, self.Q)
+        pnode7 = pnode8 - self._get_pgz(0, self.dpump, self._get_Tz(self.lpipe)) - self._get_pfriction(self.dpump) + self._get_ppump(self.Ppump, self.Q)
 
         return pnode7
 
     def get_pnode3(self, pnode4):
-        pnode3 = pnode4 + self._get_pgz(0, self.dpump, self.T_aqproducer) + self._get_pfriction(self.dpump) #+ self._get_ppump(self.Ppump, self.Q)
+        pnode3 = pnode4 + self._get_pgz(0, self.dpump, self._get_Tz(self.lpipe)) + self._get_pfriction(self.dpump) #+ self._get_ppump(self.Ppump, self.Q)
 
         return pnode3
 
@@ -138,7 +193,7 @@ class DoubletGenerator:
 
     def _get_ppump(self, Ppump, Q):
         ppump = Ppump / (Q * self.effpump) # appropiate value is 20e5 Pa
-        print('pump added pressure', ppump)
+        # print('pump added pressure', ppump)
 
         return ppump
 
@@ -151,7 +206,7 @@ class DoubletGenerator:
         p (float): value of pressure
         """
         pgz = patm + self.aquifer.g * self.aquifer.rhof * z                 # density as a constant
-        pgz = patm + self.aquifer.g * self.rho(T, pgz) * z   # density as a function of temperature and pressure
+        # pgz = patm + self.aquifer.g * self.rho(np.mean(T)-273, pgz) * z     # density as a function of temperature and pressure
 
         return pgz
 
@@ -159,28 +214,6 @@ class DoubletGenerator:
         pfriction = (self._get_f() * self.aquifer.rhof * self.get_vmean(self.Q) * z) / 2 * self.aquifer.D
 
         return pfriction
-
-    def _get_T_heatloss_pipe(self, length_pipe):
-        alpha = self.aquifer.labdas / ( self.aquifer.rhos * self.aquifer.cps) #thermal diffusion of rock
-        gamma = 0.577216 #euler constant
-
-        q_heatloss_pipe = 4 * math.pi * self.aquifer.labdas * ( self.T_wellbore - self._get_T(length_pipe) ) / math.log( ( 4 * alpha * self.time ) / (math.exp(gamma) * (self.aquifer.D/2)**2 ) )
-
-        return q_heatloss_pipe
-
-    def _get_T_HE(self, length_pipe):
-        T_HE = self.T_wellbore
-
-        for i in range(len(length_pipe)-1):
-            T_HE -= length_pipe[-2] * self.q_heatloss_pipe[i] / ( self.aquifer.mdot * self.aquifer.cpf )
-
-        return T_HE
-
-    # def _get_Power_HE(self):
-    #     eta = 0.61
-    #     Power_HE = (self.T_HE - well.Tinj) * well.Q * aquifer.rhof * eta
-    #
-    #     return Power_HE
 
     def _get_f(self):
         f = ( 1.14 - 2 * math.log10( self.aquifer.ε / self.aquifer.D + 21.25 / ( self.get_Re( self.get_vmean(self.Q) )**0.9 ) ) )**-2
@@ -214,15 +247,15 @@ class DoubletGenerator:
     #     P_wb = P_aquifer + ( ( Q * self.mu(T_aquifer, P_aquifer) ) / ( 2 * math.pi * self.aquifer.K * self.aquifer.H ) ) * np.log ( self.aquifer.L / self.aquifer.rw)
     #     return P_wb
 
-    def _get_T(self, d):
+    def _get_Tz(self, z):
         """ Computes temperature of the aquifer as a function of the depth
 
         Arguments:
-        d (float): depth (downwards from groundlevel is positive)
+        z (float): depth (downwards from groundlevel is positive)
         Returns:
         T (float): value of temperature
         """
-        T = self.aquifer.Tsur + d * self.aquifer.labda
+        T = self.aquifer.Tsur + z * self.aquifer.labda
         return T
 
     # Thermophysical properties
@@ -262,8 +295,8 @@ class DoubletGenerator:
     #     # P_grid[self.Ny/2][self.Nx/3] = self.P_wellbore
     #     # P_grid[5][16] = self.P_wellbore
     #     # P_grid[4][16] = self.P_wellbore
-    #     T_grid[5][8] = self.aquifer.Tinj
-    #     T_grid[4][8] = self.aquifer.Tinj
+    #     T_grid[5][8] = self.Tinj
+    #     T_grid[4][8] = self.Tinj
     #
     #     return T_grid
 
@@ -329,18 +362,30 @@ class DoubletGenerator:
 def evaluateDoublet(doublet):
     print("\r\n############## Analytical values model ##############\n"
           "m_dot:           ", doublet.aquifer.mdot, "Kg/s\n"
+          "ppump,p/i        ", doublet.ppump/1e5, "Bar\n"
           "pnode10/p_aq,p:  ", doublet.pnode10/1e5, "Bar\n"
           "pnode9/p_bh,p:   ", doublet.pnode9/1e5, "Bar\n"
           "pnode8/p_pu,p:   ", doublet.pnode8/1e5, "Bar\n"
+          "pnode7/p_out,p:  ", doublet.pnode7/1e5, "Bar\n"
           "pnode6/p_in,HE:  ", doublet.pnode6/1e5, "Bar\n"
           "pnode5/p_out,HE: ", doublet.pnode5/1e5, "Bar\n"
           "pnode2/p_bh,i:   ", doublet.pnode2/1e5, "Bar\n"
           "pnode1/p_aq,i:   ", doublet.pnode1/1e5, "Bar\n"
-          "Tnode9/T_bh,p:   ", doublet.T_wellbore-273, "Celcius\n"
-          "ppump,p/i        ", doublet.P_pump/1e5, "Bar\n"
-          "Tnode6/T_in,HE:  ", doublet.T_HE-273, "Celcius\n"
-          "Tnode5/T_out,HE: ", doublet.aquifer.Tinj-273, "Celcius\n"
-          "Power,HE:        ", doublet.Power_HE/1e6, "MW")
+          "Tnode9/T_bh,p:   ", doublet.Tnode9-273, "Celcius\n"
+          "Tnode8/T_pu,p:   ", doublet.Tnode8-273, "Celcius\n"
+          "Tnode7/T_in,HE:  ", doublet.Tnode7-273, "Celcius\n"                                                
+          "Tnode6/T_in,HE:  ", doublet.Tnode6-273, "Celcius\n"
+          "Tnode5/T_out,HE: ", doublet.Tnode5-273, "Celcius\n"
+          "Tnode4/T_in,i:   ",  doublet.Tnode4-273, "Celcius\n"
+          "Tnode3/T_pu,i:   ", doublet.Tnode3-273, "Celcius\n"
+          "Tnode2/T_bh,i:   ", doublet.Tnode2-273, "Celcius\n"                                                   
+          "Power,HE:        ", doublet.Phe/1e6, "MW")
+    MPA = 1e6
+    pnodelist = [doublet.pnode2 / MPA, doublet.pnode3 / MPA, doublet.pnode4 / MPA, doublet.pnode5 / MPA,
+                 doublet.pnode6 / MPA, doublet.pnode7 / MPA, doublet.pnode8 / MPA, doublet.pnode9 / MPA]
+    Tnodelist = [doublet.Tnode2, doublet.Tnode3, doublet.Tnode4, doublet.Tnode5, doublet.Tnode6, doublet.Tnode7,
+                 doublet.Tnode8, doublet.Tnode9]
+    return pnodelist, Tnodelist
 
 # ## Finite element thermo-hydraulic model
 #

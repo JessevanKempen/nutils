@@ -50,7 +50,7 @@ t0 = time.time()
 
 ################# User settings ###################
 # Define the amount of samples
-N = 50
+N = 1
 
 # Define time of simulation
 timestep = 60
@@ -80,7 +80,7 @@ params_aquifer, params_well = read_from_txt( "parameters.txt" )
 # Construct the objects for the doublet model
 print("Constructing the doublet model...")
 aquifer = Aquifer(params_aquifer)
-doublet = DoubletGenerator(aquifer, aquifer.pref) #Initial well pressure at start
+# doublet = DoubletGenerator(aquifer)
 
 from myUQ import *
 from files.myUQlib import *
@@ -123,10 +123,8 @@ if not performInference:
 
     # Evaluate the doublet model
     print("\r\nEvaluating numerical solution for the doublet model...")
-    doublet = DoubletGenerator(aquifer, sol[0], parametersRVS, t1steps * 2 + 1)
-    evaluateDoublet(doublet)
-
-    #output: nodesmatrix []
+    doublet = DoubletGenerator(aquifer, sol)
+    pnodelist, Tnodelist = evaluateDoublet(doublet)
 
 ######## Inverse Uncertainty Quantification #########
 else:
@@ -546,17 +544,25 @@ print("\r\nDone. Post-processing...")
 ###########################
 
 print('Post processing. Plot 95% CI with seaborn')
-my_list = [doublet.pnode2/MPA, doublet.pnode3/MPA, doublet.pnode4/MPA, doublet.pnode5/MPA, doublet.pnode6/MPA, doublet.pnode7/MPA, doublet.pnode8/MPA, doublet.pnode9/MPA]
-print(len(my_list))
 cmap = mpl.cm.autumn
 plt.figure(figsize=(8, 2))
-for node in range(len(my_list)):
+for node in range(len(pnodelist)):
     with open('pnode' + str(node+2) + '.npy', 'wb') as f:
-        np.save(f, my_list[node])
+        np.save(f, pnodelist[node])
     show_seaborn_plot('pnode' + str(node+2) + '.npy', str(node+2))
     # plt.legend(str(node+2))
 plt.xlabel("t [min]", size=14)
 plt.ylabel("p(t) [MPa]", size=14)
+plt.tight_layout();
+
+plt.figure(figsize=(8, 2))
+for node in range(len(Tnodelist)):
+    with open('Tnode' + str(node+2) + '.npy', 'wb') as f:
+        np.save(f, Tnodelist[node])
+    show_seaborn_plot('Tnode' + str(node+2) + '.npy', str(node+2))
+    plt.legend(str(node+2))
+plt.xlabel("t [min]", size=14)
+plt.ylabel("T(t) [K]", size=14)
 plt.tight_layout();
 
 plt.show()

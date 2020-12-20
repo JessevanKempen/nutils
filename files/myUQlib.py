@@ -395,9 +395,16 @@ def performAA(params, x):
     # Initialize parameters
     H, φ, k_int, ct, Q, cs = params
     K = k_int / aquifer.mu
+    cp = aquifer.cp
+    ρ = aquifer.ρ
+    λ = aquifer.λ
+    ρf = aquifer.rhof
+    cf = aquifer.cpf
+    cpratio = (ρf * cf) / (ρ * cp)
 
     # Initialize boundary conditions
     pref = aquifer.pref
+    Tref = aquifer.Tref
     rw = aquifer.rw
     rmax = aquifer.rmax
 
@@ -420,17 +427,23 @@ def performAA(params, x):
                     try:
                         pexact[index, istep] = get_p_drawdown(H[index], φ[index], K[index], ct[index], Q[index], rw, pref,
                                                               time)
-                        Texact[index, istep] = 0
+                        Texact[index, istep] = get_T_drawdown(H[index], φ[index], K[index], ct[index], Q[index], rw, Tref,
+                                                              time, cpratio)
                     except:
                         pexact[index, istep] = get_p_drawdown(H, φ, K, ct, Q, rw, pref,
                                                               time)
+                        Texact[index, istep] = get_T_drawdown(H, φ, K, ct, Q, rw, Tref,
+                                                              time, cpratio)
                 else:
                     try:
                         pexact[index, istep] = get_p_buildup(H[index], φ[index], K[index], ct[index], Q[index], rw, pref,
                                                          t1end, time)
-                        Texact[index, istep] = 0
+                        Texact[index, istep] = get_T_buildup(H[index], φ[index], K[index], ct[index], Q[index], rw, Tref,
+                                                             t1end, time, cpratio, cp, ρ, λ)
                     except:
                         pexact[index, istep] = get_p_buildup(H, φ, K, ct, Q, rw, pref,
                                                              t1end, time)
+                        Texact[index, istep] = get_T_buildup(H, φ, K, ct, Q, rw, Tref, t1end, time, cpratio, cp, ρ, λ)
 
+    print("pressure", pexact, 'temperature', Texact)
     return pexact, Texact

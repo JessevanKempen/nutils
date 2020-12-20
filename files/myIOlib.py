@@ -36,7 +36,7 @@ def generate_txt( filename):
         'dbasis': 2528,
         'dpump': 710,
         'dsensor': 2196,
-        'labda': 0.031,
+        'labda': 0.032,
         'Tsurface': 20+273,
         'porosity': 0.2,                #'porosity': 0.046,
         'permeability': 9e-10,
@@ -129,8 +129,10 @@ def show_seaborn_plot( filename, label):
     with open(filename, 'rb') as file:
         data = np.transpose(np.load(file))
     print('data', data)
+    # try:
     df = pd.DataFrame(data[0:, 0:], columns=['f' + str(i) for i in range(data.shape[1])])
-    # print(df)
+    # except:
+    #     df = pd.DataFrame(data, columns=['f' + str(i) for i in range(data.shape[1])])
 
     draw_df = df.reset_index().melt(id_vars=['index'], var_name='col')
 

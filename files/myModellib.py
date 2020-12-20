@@ -46,6 +46,46 @@ def get_p_buildup(H, φ, K, ct, Q, R, pref, t1end, t2):
 
     return pexb
 
+def get_T_drawdown(H, φ, K, ct, Q, R, Tref, t1, cpratio, phieff=0, constantjt=2e-7):
+    # Initialize parameters
+    Jw = Q / H
+    eta = K / (φ * ct)
+
+    # Compute drawdown pressure
+    aconstant = ( cpratio * Jw) / (4 * math.pi * eta)
+    ei = sc.expi(-R ** 2 / (4 * eta * t1))
+    dp = (Jw * ei / (4 * math.pi * K))
+
+    # Compute drawdown temperature
+    Tei = sc.expi(-R ** 2 / (4 * eta * t1) - aconstant)
+    Tex = Tref + (constantjt * dp) - Jw / (4 * math.pi * K) * (phieff - constantjt ) * Tei
+
+    print("T drawdown", Tex)
+    print((constantjt * dp))
+    print( Jw / (4 * math.pi * K) * (phieff - constantjt ) * Tei)
+
+    return Tex
+
+def get_T_buildup(H, φ, K, ct, Q, R, Tref, t1end, t2, cpratio, cp, ρ, λ, phieff=0, constantjt=2e-7, latetime=60):
+    # Initialize parameters
+    Jw = Q / H
+    eta = K / (φ * ct)
+
+    # Import drawdown temperature
+    Tex = get_T_drawdown(H, φ, K, ct, Q, R, Tref, t1end, cpratio, phieff=0, constantjt=2e-7)
+
+    if (t2-t1end < latetime):
+        #early-time buildup solution
+        earlyTei = sc.expi(-R ** 2 / (4 * eta * t2-t1end))
+        Tex2 = Tex - earlyTei * phieff * Jw / (4 * math.pi * K)
+
+    else:
+        #late-time buildup solution
+        lateTei  = sc.expi(-R**2 * cp * ρ / (4 * λ * t2-t1end))
+        Tex2 = Tex - lateTei * constantjt * Jw / (4 * math.pi * K)
+
+    return Tex2
+
 def get_dp_drawdown(H, φ, K, ct, Q, R, t1):
     # Initialize parameters
     Jw = Q / H
@@ -123,6 +163,7 @@ def Tanalyticaldrawdown(ns, t1, R):
     Tei = sc.expi((-R**2/(4*ns.eta*t1) - aconstant).eval())
     Tex = (ns.Tref - (ns.constantjt * pressuredif) + ns.Jw / (4 * math.pi * ns.K) * (ns.phieff - ns.constantjt ) * Tei).eval()
 
+    print("T drawdown FEA", Tex)
     return Tex
 
 def Tanalyticalbuildup(ns, endtime, t2, R):
