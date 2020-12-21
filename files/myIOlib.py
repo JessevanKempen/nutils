@@ -5,7 +5,11 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib import collections
 # import matplotlib.pyplot as plt
-import seaborn as sns; sns.set()
+import seaborn as sns;
+
+from files.myModellib import get_welldata
+
+sns.set()
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -49,7 +53,7 @@ def generate_txt( filename):
         'labdas' : 4.2, # thermal conductivity solid [W/mK]
         'labdaf': 0.663, # thermal conductivity fluid [W/mK]
         'saltcontent': 0.155, # [kg/l]
-        'pref': 225e5,
+        'pref': 222.5e5,
         'Tref': 90 + 273,
         'g' : 9.81,
         'rw': 0.1, #0.126
@@ -128,11 +132,8 @@ def show_seaborn_plot( filename, label):
     print('filename', filename)
     with open(filename, 'rb') as file:
         data = np.transpose(np.load(file))
-    print('data', data)
-    # try:
+
     df = pd.DataFrame(data[0:, 0:], columns=['f' + str(i) for i in range(data.shape[1])])
-    # except:
-    #     df = pd.DataFrame(data, columns=['f' + str(i) for i in range(data.shape[1])])
 
     draw_df = df.reset_index().melt(id_vars=['index'], var_name='col')
 
@@ -162,3 +163,37 @@ def show_uniform_plot():
 
 # show_seaborn_plot('pnode8.npy', "node8")
 # plt.show()
+
+def show_realdata_plot():
+    print('Posterior distributions real data')
+    plt.figure(figsize=(8, 2))
+    for param in ['TBH', 'TESP']:
+        samples = get_welldata(param)
+        x = get_welldata('CORRECTED_TIME')/60
+        y = samples
+        plt.plot(x, y)
+    plt.xlabel("t [min]", size=14)
+    plt.ylabel("T(t) [K]", size=14)
+    plt.axvline(x=10320/60, c='k')
+    plt.figure(figsize=(8, 2))
+    for param in ['PBH', 'PESP']:
+        samples = get_welldata(param)/1e6
+        x = get_welldata('CORRECTED_TIME') / 60
+        y = samples
+        plt.plot(x, y)
+    plt.xlabel("t [min]", size=14)
+    plt.ylabel("p(t) [MPa]", size=14)
+    plt.axvline(x=10320/60, c='k')
+    # secay = ax.secondary_yaxis('top', functions=(deg2rad, rad2deg))
+    # secax.set_ylabel('angle [rad]')
+    plt.show()
+    plt.tight_layout();
+
+    plt.show()
+
+# for node in range(len(pnodelist)):
+#     with open('pnode' + str(node+2) + '.npy', 'wb') as f:
+#         np.save(f, pnodelist[node])
+#     show_seaborn_plot('pnode' + str(node+2) + '.npy', str(node+2))
+#     # plt.legend(str(node+2))
+

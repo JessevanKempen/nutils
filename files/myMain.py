@@ -53,8 +53,8 @@ t0 = time.time()
 N = 1
 
 # Define time of simulation
-timestep = 60
-endtime = 3600
+timestep = 30
+endtime = 10320
 t1steps = round(endtime / timestep)
 Nt = 2*t1steps+1
 x = timestep * np.linspace(0, 2 * t1steps, Nt)
@@ -63,7 +63,7 @@ x = timestep * np.linspace(0, 2 * t1steps, Nt)
 MPA = 1e6
 
 # Forward/Bayesian Inference calculation
-performInference = False
+performInference = True
 useFEA = False
 
 # Location to store output
@@ -136,8 +136,8 @@ else:
 
     # Set distribution settings
     chains = 4
-    ndraws = 4000  # number of draws from the distribution
-    nburn = 0   # number of "burn-in points" (which we'll discard)
+    ndraws = 15  # number of draws from the distribution
+    nburn = 5   # number of "burn-in points" (which we'll discard)
 
     # Library functions
     def get_𝜇_K(porosity, size):
@@ -192,7 +192,11 @@ else:
     # Make data
     np.random.seed(716742)  # set random seed, so the data is reproducible each time
     sigma = CV * np.mean(truemodel)
-    data = sigma * np.random.randn(Nt) + truemodel
+    # data = sigma * np.random.randn(Nt) + truemodel
+
+    # Use real data
+    data = get_welldata('PBH')
+
 
     # plot transient test
     parameters = {'axes.labelsize': 14,
@@ -209,7 +213,6 @@ else:
     # Create our Op
     logl = LogLikeWithGrad(my_loglike, data, x, sigma)
     print(logl)
-
     ###########################
     #     Synthetic data      #
     ###########################
@@ -246,6 +249,7 @@ else:
     #     z_t = p_true + np.random.randn(Nt) * sd_p
 
     # use PyMC3 to sampler from log-likelihood
+
     with pm.Model() as opmodel:
         ###########################
         #    Prior information    #
@@ -269,7 +273,7 @@ else:
         # Lognormal priors for unknown model parameters
         Hpdf = pm.Uniform('H', lower=35, upper=105)
         φpdf = pm.Uniform('φ', lower=0.1, upper=0.3)
-        Kpdf = pm.Uniform('K', lower=0.5e-12, upper=1.5e-12)
+        Kpdf = pm.Uniform('K', lower=0.5e-13, upper=1.5e-13)
         ctpdf = pm.Uniform('ct', lower=0.5e-10, upper=1.5e-10)
         Qpdf = pm.Uniform('Q', lower=0.035, upper=0.105)
         cspdf = pm.Uniform('cs', lower=1325, upper=3975)
@@ -539,10 +543,6 @@ print("\r\nDone. Post-processing...")
 
 #################### Postprocessing #########################
 
-###########################
-#     Post processing     #
-###########################
-
 print('Post processing. Plot 95% CI with seaborn')
 cmap = mpl.cm.autumn
 plt.figure(figsize=(8, 2))
@@ -564,6 +564,13 @@ for node in range(len(Tnodelist)):
 plt.xlabel("t [min]", size=14)
 plt.ylabel("T(t) [K]", size=14)
 plt.tight_layout();
+
+# plt.figure(figsize=(8, 2))
+# with open('power.npy', 'wb') as f:
+#     np.save(f, doublet.Phe/1e6)
+# show_seaborn_plot('power.npy', 'power output')
+# plt.xlabel("t [min]", size=14)
+# plt.ylabel("P(t) [MW]", size=14)
 
 plt.show()
 

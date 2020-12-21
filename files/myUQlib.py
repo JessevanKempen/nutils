@@ -320,12 +320,14 @@ def my_model(theta, x):
 
 def generateRVSfromPDF(size):
     # Uniforme verdeling nodig bij gebruik van sensitiviteitsanalyse
-    Hpdf = H = np.random.uniform(low=99, high=101, size=size)
-    φpdf = φ = get_samples_porosity(size)  # joined distribution
-    Kpdf = K = get_samples_permeability(φpdf, size)  # joined distribution
-    ctpdf = ct = np.random.uniform(low=0.99e-10, high=1.01e-10, size=size)
-    Qpdf = Q = np.random.uniform(low=0.0693, high=0.0707, size=size)
-    cspdf = cs = np.random.uniform(low=2623.5, high=2676.5, size=size)
+    Hpdf = H = np.random.uniform(low=150, high=150, size=size)
+    # φpdf = φ = get_samples_porosity(size)  # joined distribution
+    # Kpdf = K = get_samples_permeability(φpdf, size)  # joined distribution
+    φpdf = φ = np.random.uniform(low=0.2, high=0.2, size=size)
+    Kpdf = K = np.random.uniform(low=1e-13, high=1e-13, size=size)
+    ctpdf = ct = np.random.uniform(low=1e-10, high=1e-10, size=size)
+    Qpdf = Q = np.random.uniform(low=0.07, high=0.07, size=size)
+    cspdf = cs = np.random.uniform(low=2650, high=2650, size=size)
 
     parametersRVS = [Hpdf, φpdf, Kpdf, ctpdf, Qpdf, cspdf]
 
@@ -445,5 +447,4 @@ def performAA(params, x):
                                                              t1end, time)
                         Texact[index, istep] = get_T_buildup(H, φ, K, ct, Q, rw, Tref, t1end, time, cpratio, cp, ρ, λ)
 
-    print("pressure", pexact, 'temperature', Texact)
     return pexact, Texact

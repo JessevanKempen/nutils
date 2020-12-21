@@ -60,10 +60,6 @@ def get_T_drawdown(H, φ, K, ct, Q, R, Tref, t1, cpratio, phieff=0, constantjt=2
     Tei = sc.expi(-R ** 2 / (4 * eta * t1) - aconstant)
     Tex = Tref + (constantjt * dp) - Jw / (4 * math.pi * K) * (phieff - constantjt ) * Tei
 
-    print("T drawdown", Tex)
-    print((constantjt * dp))
-    print( Jw / (4 * math.pi * K) * (phieff - constantjt ) * Tei)
-
     return Tex
 
 def get_T_buildup(H, φ, K, ct, Q, R, Tref, t1end, t2, cpratio, cp, ρ, λ, phieff=0, constantjt=2e-7, latetime=60):
@@ -209,7 +205,7 @@ def RefineBySDF(topo, radius, sdf, nrefine):
 #Indirect welldata from internet
 def get_welldata(parameter):
     welldata = pd.read_excel(r'C:\Users\s141797\OneDrive - TU Eindhoven\Scriptie\nlog_welldata.xlsx') #for an earlier version of Excel use 'xls'
-    columns = ['PRESSURE', 'TEMPERATURE','CORRECTED_TIME']
+    columns = ['TBH', 'TESP', 'PBH', 'PESP', 'Q', 'CORRECTED_TIME']
 
     df = pd.DataFrame(welldata, columns = columns)
 
